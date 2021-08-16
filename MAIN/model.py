@@ -6,8 +6,8 @@ from model_HGT import *
 from model_GAE import *
 import torch.nn.functional as F
 import dgl.function as fn
-from layers import AvgNeighbor, Discriminator
-import utils
+from layers_GMI import AvgNeighbor, Discriminator
+from utils_GMI import process_GMI
 
 
 class Model_HGT_GAE(nn.Module):
@@ -54,9 +54,9 @@ class Model_HGT_GAE_GMI(nn.Module):
         h_neighbour_KG = torch.squeeze(h_neighbour_KG, 0)
         """FMI (X_i consists of the node i itself and its neighbors)"""
         # I(h_i; x_i)
-        res_mi_KG = self.disc1(embed_KG, features_KG, utils.process.negative_sampling(adj_KG, neg_num))
+        res_mi_KG = self.disc1(embed_KG, features_KG, process_GMI.negative_sampling(adj_KG, neg_num))
         # I(h_i; x_j) node j is a neighbor
-        res_local_KG = self.disc2(h_neighbour_KG, embed_KG, utils.process.negative_sampling(adj_KG, neg_num))
+        res_local_KG = self.disc2(h_neighbour_KG, embed_KG, process_GMI.negative_sampling(adj_KG, neg_num))
 
 
         adj_rec, embed_SN, h_w_SN = self.model_SN(SN, features_SN)
@@ -66,9 +66,10 @@ class Model_HGT_GAE_GMI(nn.Module):
         # embed_SN和h_w_SN都是12499*16，h_neighbour_SN是1*12499*16
         """FMI (X_i consists of the node i itself and its neighbors)"""
         # I(h_i; x_i)
-        res_mi_SN = self.disc1(embed_SN, features_SN, utils.process.negative_sampling(adj_SN, neg_num))
+        res_mi_SN = self.disc1(embed_SN, features_SN, process_GMI.negative_sampling(adj_SN, neg_num))
         # I(h_i; x_j) node j is a neighbor
-        res_local_SN = self.disc2(h_neighbour_SN, embed_SN, utils.process.negative_sampling(adj_SN, neg_num))
+        res_local_SN = self.disc2(h_neighbour_SN, embed_SN, process_GMI.negative_sampling(adj_SN, neg_num))
+        # 将社交网络的节点表示翻译到知识图谱的向量空间中
         trans_SN = self.translation(embed_SN)
         return pred_pos, pred_neg, res_mi_KG, res_local_KG, adj_rec, embed_SN, trans_SN, res_mi_SN, res_local_SN
 
@@ -80,14 +81,16 @@ class Model_HGT_TGN_GMI(nn.Module):
         self.model_SN = model_SN
         # SN的对比学习和互信息部分
         self.prelu = nn.PReLU()
+        # 这一层的forward顺序是反的
         self.disc1 = Discriminator(in_dim, out_dim)
         self.disc2 = Discriminator(out_dim, out_dim)
+        self.fc = nn.Linear(in_dim, out_dim)
         # 翻译层，将社交网络的向量转移到知识图谱的向量空间中
         self.translation = nn.Linear(out_dim, out_dim)
         self.avg_neighbor = AvgNeighbor()
 
     # def forward(self, KG, nega_KG, etype, postive_graph_SN, negative_graph_SN, blocks_SN, device):
-    def forward(self, KG, nega_KG, etype, neg_num, device):
+    def forward(self, KG, nega_KG, etype, neg_num, positive_graph_SN, negative_graph_SN, blocks, device):
         pred_pos_KG, pred_neg_KG = self.model_KG(KG, nega_KG, etype)
         # KG部分的对比学习
         # 对比学习是否只比较同类节点，这里将知识图谱转成同质图，即不考虑节点类型和边的类型。节点数量太多，邻接矩阵可能会炸
@@ -102,20 +105,27 @@ class Model_HGT_TGN_GMI(nn.Module):
         h_neighbour_KG = torch.squeeze(h_neighbour_KG, 0)
         """FMI (X_i consists of the node i itself and its neighbors)"""
         # I(h_i; x_i)
-        res_mi_KG = self.disc1(embed_KG, features_KG, utils.process.negative_sampling(adj_KG, neg_num))
+        res_mi_KG = self.disc1(embed_KG, features_KG, process_GMI.negative_sampling(adj_KG, neg_num))
         # I(h_i; x_j) node j is a neighbor
-        res_local_KG = self.disc2(h_neighbour_KG, embed_KG, utils.process.negative_sampling(adj_KG, neg_num))
+        res_local_KG = self.disc2(h_neighbour_KG, embed_KG, process_GMI.negative_sampling(adj_KG, neg_num))
 
+        pred_pos_SN, pred_neg_SN, embed_SN = self.model_SN.embed(positive_graph_SN, negative_graph_SN, blocks, device)
 
-        # pred_pos_SN, pred_neg_SN = self.model_SN.embed(postive_graph_SN, negative_graph_SN, blocks_SN)
         # SN部分的对比学习
-        # h_neighbour_SN = self.prelu(self.avg_neighbor(h_w_SN, adj_SN))
-        # h_neighbour_SN = torch.squeeze(h_neighbour_SN, 0)
-        # # embed_SN和h_w_SN都是12499*16，h_neighbour_SN是1*12499*16
-        # """FMI (X_i consists of the node i itself and its neighbors)"""
-        # # I(h_i; x_i)
-        # res_mi_SN = self.disc1(embed_SN, features_SN, utils.process.negative_sampling(adj_SN, neg_num))
-        # # I(h_i; x_j) node j is a neighbor
-        # res_local_SN = self.disc2(h_neighbour_SN, embed_SN, utils.process.negative_sampling(adj_SN, neg_num))
-        # trans_SN = self.translation(embed_SN)
-        return pred_pos_KG, pred_neg_KG, res_mi_KG, res_local_KG#, pred_pos_SN, pred_neg_SN#, res_mi_SN, res_local_SN
+        adj_SN = positive_graph_SN.adjacency_matrix().to_dense().to(device)
+        # 这里的h_w_SN使用
+        features_SN = positive_graph_SN.ndata['feature'].to(device)
+        h_w_SN = self.fc(features_SN)
+        h_neighbour_SN = self.prelu(self.avg_neighbor(h_w_SN, adj_SN))
+        h_neighbour_SN = torch.squeeze(h_neighbour_SN, 0)
+        # embed_SN和h_w_SN都是12499*16，h_neighbour_SN是1*12499*16
+        """FMI (X_i consists of the node i itself and its neighbors)"""
+        # I(h_i; x_i)
+        # print(embed_SN.shape, features_SN.shape)
+        res_mi_SN = self.disc1(embed_SN, features_SN, process_GMI.negative_sampling(adj_SN, neg_num))
+        # I(h_i; x_j) node j is a neighbor
+        res_local_SN = self.disc2(h_neighbour_SN, embed_SN, process_GMI.negative_sampling(adj_SN, neg_num))
+        trans_SN = self.translation(embed_SN)
+
+        del HKG, adj_KG, adj_SN, features_SN, h_w_SN, h_neighbour_SN, h_neighbour_KG
+        return pred_pos_KG, pred_neg_KG, res_mi_KG, res_local_KG, pred_pos_SN, pred_neg_SN, trans_SN, res_mi_SN, res_local_SN

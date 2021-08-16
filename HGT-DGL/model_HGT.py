@@ -138,12 +138,14 @@ class HGT_PF(nn.Module):
         self.adapt_ws  = nn.ModuleList()
         # 每类节点做映射
         for t in range(len(G.node_dict)):
-            self.adapt_ws.append(nn.Linear(in_features,   hidden_features))
+            self.adapt_ws.append(nn.Linear(in_features, hidden_features))
         for _ in range(n_layers):
             self.gcs.append(HGTLayer(hidden_features, hidden_features, len(G.node_dict), len(G.edge_dict), n_heads, use_norm = use_norm))
         # 这里可以给每类节点一个单独的映射矩阵
         self.out = nn.Linear(hidden_features, out_features)
         self.pred = HeteroDotProductPredictor()
+        # 相当于SN中对每个节点的线性变换
+        self.fc = nn.Linear(in_features, out_features, bias=False)
 
     def forward(self, G, nega_G, etype):
         # etype表示对哪类边做分类
@@ -156,6 +158,7 @@ class HGT_PF(nn.Module):
             self.gcs[i](G, 'h', 'h')
         for ntype in G.ntypes:
             G.nodes[ntype].data['h'] = self.out(G.nodes[ntype].data['h'])
+            G.nodes[ntype].data['w'] = self.fc(G.nodes[ntype].data['feature'])
         h = {ntype: G.nodes[ntype].data['h'] for ntype in G.ntypes}
         return self.pred(G, h, etype), self.pred(nega_G, h, etype)
 

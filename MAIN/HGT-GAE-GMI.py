@@ -28,6 +28,9 @@ parser.add_argument('--hidden2', '-h2', type=int, default=16, help='Number of un
 parser.add_argument('--dim_init', '-h_in', type=int, default=400, help='Dim of initial embedding vector.')
 parser.add_argument('--dim_embed', '-h_out', type=int, default=16, help='Dim of final embedding vector.')
 parser.add_argument('--neg_num', type=int, default=2, help='Number of negtive sampling of each node.')
+parser.add_argument('--align_num', type=int, default=100, help='Number of sampling of aligned node.')
+parser.add_argument('--align_dist', type=str, default='L2', help='The type of align nodes distance.',
+                    choices=['L1', 'L2', 'cos'])
 parser.add_argument('--alpha', type=float, default=0.8,
                     help='parameter for I(h_i; x_i) (default: 0.8)')
 parser.add_argument('--beta', type=float, default=1.0,
@@ -140,10 +143,10 @@ def SN_data_prepare():
     train_edge_idx = torch.tensor(train_edge_idx).to(device)
     train_SN = dgl.edge_subgraph(SN, train_edge_idx, preserve_nodes=True).to(device)
     train_SN = train_SN.to(device)
-    adj = train_SN.adjacency_matrix().to_dense().to(device)
+    # adj = train_SN.adjacency_matrix().to_dense().to(device)
 
     # compute loss parameters
-    weight_tensor, norm = train_GAE.compute_loss_para(adj, device)
+    # weight_tensor, norm = train_GAE.compute_loss_para(adj, device)
 
     # create model
     gae_model = model_GAE.GAEModel(in_dim, args.hidden1, args.dim_embed)
@@ -203,7 +206,7 @@ if __name__ == '__main__':
     model = Model_HGT_GAE_GMI(model_KG, model_SN, args.dim_init, args.dim_embed).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters())
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, total_steps=1000, max_lr=1e-3, pct_start=0.05)
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, total_steps=args.epochs, max_lr=1e-3, pct_start=0.05)
 
     for epoch in range(args.epochs):
         t = time.time()
@@ -211,7 +214,7 @@ if __name__ == '__main__':
         model.train()
         negative_graph = data_process_KG.construct_negative_graph(KG, 1, triplet, device)
 
-        pos_score, neg_score, res_mi_KG, res_local_KG, logits, features, res_mi_SN, res_local_SN = model(KG, negative_graph, triplet, SN, feats, adj, args.neg_num, device)
+        pos_score, neg_score, res_mi_KG, res_local_KG, logits, features, trans_SN, res_mi_SN, res_local_SN = model(KG, negative_graph, triplet, SN, feats, adj, args.neg_num, device)
         res_mi_KG_pos, res_mi_KG_neg = res_mi_KG
         res_local_KG_pos, res_local_KG_neg = res_local_KG
         res_mi_SN_pos, res_mi_SN_neg = res_mi_SN
@@ -224,26 +227,27 @@ if __name__ == '__main__':
         loss_SN_MI = args.alpha * utils.process.mi_loss_jsd(res_mi_SN_pos, res_mi_SN_neg) + args.beta * utils.process.mi_loss_jsd(res_local_SN_pos, res_local_SN_neg)
 
         # 随机选择paper_id
-        loss_align = 0
+        # loss_align = 0
         nodes = KG.nodes(ntype='paper')
         # 这里的100是从锚节点中选取的训练样本数
-        node_align = np.random.choice(nodes.cpu(), 100, replace=False)
+        node_align = np.random.choice(nodes.cpu(), args.align_num, replace=False)
         node_align = torch.from_numpy(node_align).to(device)
         # print(KG.nodes['paper'].data['h'].shape)
         # print(features.shape)
         # exit()
-        # 向量间的距离作为损失函数
-        metrix = KG.nodes['paper'].data['h'][node_align]-features[node_align]
-        # 这里对齐没有加翻译层
-        loss_align = (metrix*metrix).sum()
-        # for id in node_align:
-        #     # print(KG.nodes['paper'].data['h'][id])
-        #     # print(feats)
-        #     vector = KG.nodes['paper'].data['h'][id]-feats[id]
-        #     # 返回向量的二阶范数
-        #     loss_align += (vector*vector).sum()#np.linalg(vector)
-
-
+        if args.align_dist == 'L2':
+            # 向量间的距离作为损失函数
+            metrix = KG.nodes['paper'].data['h'][node_align]-trans_SN[node_align]
+            # 这里对齐没有加翻译层
+            loss_align = (metrix*metrix).sum()
+        elif args.align_dist == 'L1':
+            metrix = KG.nodes['paper'].data['h'][node_align]-trans_SN[node_align]
+            loss_align = torch.abs(metrix).sum()
+        elif args.align_dist == 'cos':
+            # dim=1，计算行向量的相似度
+            res = torch.cosine_similarity(KG.nodes['paper'].data['h'][node_align], trans_SN[node_align], dim=1)
+            # 余弦相似度在[-1, 1]间，为1相似度高，损失函数就小
+            loss_align = -res.sum()/args.align_num
 
         loss = loss_KG + 0.5*loss_SN + 0.8*loss_align + 0.7*loss_KG_MI + 0.5*loss_SN_MI
 

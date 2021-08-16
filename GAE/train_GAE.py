@@ -13,8 +13,9 @@ import torch
 import torch.nn.functional as F
 
 from input_data import load_data
-import model
+import model_GAE
 from preprocess import mask_test_edges, mask_test_edges_dgl, sparse_to_tuple, preprocess_graph
+import random
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
@@ -51,12 +52,17 @@ def get_acc(adj_rec, adj_label):
     labels_all = adj_label.view(-1).long()
     # 原版
     preds_all = (adj_rec > 0.5).view(-1).long()
-    # preds_all = (torch.sigmoid(adj_rec) > 0.5).view(-1).long()
-    # print(preds_all.shape)
-    # print(labels_all.shape)
-    # print((preds_all == labels_all).sum().float(), labels_all.size(0))
-
     accuracy = (preds_all == labels_all).sum().float() / labels_all.size(0)
+    # 修改版，做采样，选取全部的正样本，然后再在整张图上随机采一部分
+    # numerator, denominator = 0.0, 0.0
+    # # 这里用循环花的时间太长了
+    # for i in range(len(labels_all)):
+    #     if labels_all[i] == 1 or random.randint(0, 1)==0:
+    #         denominator += 1
+    #         numerator += (preds_all[i]==labels_all[i])
+    #
+    # accuracy = numerator / denominator
+
     # print(accuracy)
     # exit()
     return float(accuracy)
@@ -135,7 +141,7 @@ def dgl_main():
         weight_tensor, norm = compute_loss_para(adj)
 
         # create model
-        gae_model = model.GAEModel(in_dim, args.hidden1, args.hidden2)
+        gae_model = model_GAE.GAEModel(in_dim, args.hidden1, args.hidden2)
         gae_model = gae_model.to(device)
 
         # create training component
@@ -231,7 +237,7 @@ def web_main():
     features = features.to_dense()
     in_dim = features.shape[-1]
 
-    vgae_model = model.VGAEModel(in_dim, args.hidden1, args.hidden2)
+    vgae_model = model_GAE.VGAEModel(in_dim, args.hidden1, args.hidden2)
     # create training component
     optimizer = torch.optim.Adam(vgae_model.parameters(), lr=args.learning_rate)
     print('Total Parameters:', sum([p.nelement() for p in vgae_model.parameters()]))

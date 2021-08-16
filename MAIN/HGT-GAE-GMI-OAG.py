@@ -3,22 +3,21 @@ import sys
 sys.path.append('../HGT-DGL')
 sys.path.append('../GAE')
 sys.path.append('../GMI')
-# from train_paper_venue import *
-import data_process
-# from utils import EarlyStopMonitor
-import data_process_KG
-import data_process_SN
-import preprocess
-from warnings import filterwarnings
-import time
+import data_process_MAIN
+import data_process_HGT
+# 导入SN模块
 import train_GAE
 import model_GAE
+import data_process_GAE
+
+import time
+
 from model_HGT import *
 from model import *
-# import dill
 import torch
 import numpy as np
 
+from warnings import filterwarnings
 filterwarnings("ignore")
 
 import argparse
@@ -43,6 +42,8 @@ parser.add_argument('--cuda', type=int, default=3, help='GPU id to use.')
 parser.add_argument('--train_ratio', type=float, default=0.7, help='Train set ratio.')
 parser.add_argument('--valid_ratio', type=float, default=0.1, help='Valid set ratio.')
 parser.add_argument('--tolerance', type=float, default=1e-3,  help='toleratd margainal improvement for early stopper')
+parser.add_argument('--max_round', type=float, default=20,  help='the max round for early stopping')
+parser.add_argument('--min_epoch', type=float, default=150,  help='the min epoch before early stopping')
 args = parser.parse_args()
 
 if args.cuda != -1:
@@ -52,7 +53,7 @@ else:
 # device = torch.device('cpu')
 
 def KG_data_prepare():
-    KG, KG_forward, KG_backward = data_process.OAG_KG_ReadData()
+    KG, KG_forward, KG_backward = data_process_MAIN.OAG_KG_ReadData()
     print(KG)
     # print(KG.adjacency_matrix(etype='written-by'))
     # exit()
@@ -60,7 +61,7 @@ def KG_data_prepare():
     # 这里的邻接矩阵作用只是提供idx的范围，行数是源节点，列数是目标节点
     # KG = KG.to(device)
     adj_orig = KG.adjacency_matrix(etype=triplet[1]).to_dense()
-    train_edge_idx, val_edges, val_edges_false, test_edges, test_edges_false = data_process_KG.mask_test_edges_dgl(KG, adj_orig, triplet[1], args.train_ratio, args.valid_ratio)
+    train_edge_idx, val_edges, val_edges_false, test_edges, test_edges_false = data_process_HGT.mask_test_edges_dgl(KG, adj_orig, triplet[1], args.train_ratio, args.valid_ratio)
     train_edge_idx = torch.tensor(train_edge_idx)#.to(device)
 
     # 老版本preserve_nodes=True会报错
@@ -127,7 +128,7 @@ def KG_data_prepare():
     print("val_roc=", "{:.5f}".format(test_roc), "val_ap=", "{:.5f}".format(test_ap))
 
 def SN_data_prepare():
-    SN, SN_forward, SN_backward = data_process.OAG_SN_ReadData()
+    SN, SN_forward, SN_backward = data_process_MAIN.OAG_SN_ReadData()
     print(SN)
     # 生成每个节点的特征向量
     # emb = nn.Parameter(torch.Tensor(len(SN.nodes()), args.dim_init), requires_grad=False)#.to(device)
@@ -140,7 +141,7 @@ def SN_data_prepare():
     adj_orig = SN.adjacency_matrix().to_dense()
 
     # build test set with 10% positive links
-    train_edge_idx, val_edges, val_edges_false, test_edges, test_edges_false = preprocess.mask_test_edges_dgl(SN, adj_orig, args.train_ratio, args.valid_ratio)
+    train_edge_idx, val_edges, val_edges_false, test_edges, test_edges_false = data_process_GAE.mask_test_edges_dgl(SN, adj_orig, args.train_ratio, args.valid_ratio)
 
     SN = SN.to(device)
 
@@ -238,19 +239,19 @@ if __name__ == '__main__':
     # print(torch.cat((node_align_KG_valid, node_align_KG_test), 0))
 
     adj_SN = SN.adjacency_matrix().to_dense().to(device)
-    weight_tensor_SN, norm_SN = train_GAE.compute_loss_para(adj_SN, device)
+    weight_tensor_SN, norm_SN = data_process_GAE.compute_loss_para(adj_SN, device)
 
     model = Model_HGT_GAE_GMI(model_KG, model_SN, args.dim_init, args.dim_embed).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters())
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, total_steps=args.epochs, max_lr=1e-3, pct_start=0.05)
-    early_stopper = data_process.EarlyStopMonitor(tolerance=args.tolerance)
+    early_stopper = data_process_MAIN.EarlyStopMonitor(max_round=args.max_round, min_epoch=args.min_epoch, tolerance=args.tolerance)
 
     for epoch in range(args.epochs):
         t = time.time()
         # 这里是在整张图上做训练
         model.train()
-        negative_graph = data_process_KG.construct_negative_graph(KG, 1, triplet, device)
+        negative_graph = data_process_HGT.construct_negative_graph(KG, 1, triplet, device)
 
         pos_score, neg_score, res_mi_KG, res_local_KG, logits, features, trans_SN, res_mi_SN, res_local_SN = \
             model(KG, negative_graph, triplet, SN, feats, adj_SN, args.neg_num, device)
@@ -259,11 +260,11 @@ if __name__ == '__main__':
         res_mi_SN_pos, res_mi_SN_neg = res_mi_SN
         res_local_SN_pos, res_local_SN_neg = res_local_SN
 
-        loss_KG = data_process_KG.compute_loss(pos_score, neg_score)
-        loss_KG_MI = args.alpha * utils.process.mi_loss_jsd(res_mi_KG_pos, res_mi_KG_neg) + args.beta * utils.process.mi_loss_jsd(res_local_KG_pos, res_local_KG_neg)
+        loss_KG = data_process_HGT.compute_loss(pos_score, neg_score)
+        loss_KG_MI = args.alpha * process_GMI.mi_loss_jsd(res_mi_KG_pos, res_mi_KG_neg) + args.beta * process_GMI.mi_loss_jsd(res_local_KG_pos, res_local_KG_neg)
         # 这里返回的logits已经经过sigmoid，GAE使用整张图作为训练样本
         loss_SN = norm_SN * F.binary_cross_entropy(logits.view(-1), adj_SN.view(-1), weight=weight_tensor_SN)
-        loss_SN_MI = args.alpha * utils.process.mi_loss_jsd(res_mi_SN_pos, res_mi_SN_neg) + args.beta * utils.process.mi_loss_jsd(res_local_SN_pos, res_local_SN_neg)
+        loss_SN_MI = args.alpha * process_GMI.mi_loss_jsd(res_mi_SN_pos, res_mi_SN_neg) + args.beta * process_GMI.mi_loss_jsd(res_local_SN_pos, res_local_SN_neg)
 
         # 随机选择author_id
         # loss_align = 0
@@ -313,15 +314,15 @@ if __name__ == '__main__':
 
         with torch.no_grad():
             # 知识图谱链接预测的结果
-            train_acc_KG = data_process_KG.get_acc(pos_score, neg_score)
-            val_roc_KG, val_ap_KG = data_process_KG.get_score(KG, val_edges_KG, val_edges_false_KG, triplet)
+            train_acc_KG = data_process_HGT.get_acc(pos_score, neg_score)
+            val_roc_KG, val_ap_KG = data_process_HGT.get_score(KG, val_edges_KG, val_edges_false_KG, triplet)
             # 社交网络链接预测的结果
-            train_acc_SN = train_GAE.get_acc(logits, adj_SN)
-            val_roc_SN, val_ap_SN = train_GAE.get_scores(val_edges_SN, val_edges_false_SN, logits)
+            train_acc_SN = data_process_GAE.get_acc(logits, adj_SN)
+            val_roc_SN, val_ap_SN = data_process_GAE.get_scores(val_edges_SN, val_edges_false_SN, logits)
             # 实体对齐的指标MRR，hits@10
             # 知识图谱的节点向量KG.nodes['author'].data['h'][node_align_KG_train]
             # 社交网络的节点向量trans_SN[node_align_SN_train]
-            val_MRR_align, val_hits5_align = data_process.align_scores(KG.nodes['author'].data['h'], trans_SN,node_align_KG_valid,
+            val_MRR_align, val_hits5_align = data_process_MAIN.align_scores(KG.nodes['author'].data['h'], trans_SN,node_align_KG_valid,
                                                                  node_align_SN_valid, 5 , args.align_dist)
 
         print("Epoch:", '%04d' % (epoch + 1), "train_loss=", "{:.5f}".format(loss.item()), "train_ACC_KG=",
@@ -339,9 +340,9 @@ if __name__ == '__main__':
             break
 
     model(KG, negative_graph, triplet, SN, feats, adj_SN, args.neg_num, device)
-    test_roc_KG, test_ap_KG = data_process_KG.get_score(KG, test_edges_KG, test_edges_false_KG, triplet)
-    test_roc_SN, test_ap_SN = train_GAE.get_scores(test_edges_SN, test_edges_false_SN, logits)
-    test_MRR_align, test_hits5_align = data_process.align_scores(KG.nodes['author'].data['h'], trans_SN,
+    test_roc_KG, test_ap_KG = data_process_HGT.get_score(KG, test_edges_KG, test_edges_false_KG, triplet)
+    test_roc_SN, test_ap_SN = data_process_GAE.get_scores(test_edges_SN, test_edges_false_SN, logits)
+    test_MRR_align, test_hits5_align = data_process_MAIN.align_scores(KG.nodes['author'].data['h'], trans_SN,
                                                                node_align_KG_valid,
                                                                node_align_SN_valid, 5, args.align_dist)
     print("test_roc_KG=", "{:.5f}".format(test_roc_KG), "test_ap_KG=", "{:.5f}".format(test_ap_KG),

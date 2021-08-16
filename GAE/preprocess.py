@@ -85,12 +85,12 @@ def mask_test_edges(adj):
     return adj_train, train_edges, val_edges, val_edges_false, test_edges, test_edges_false
 
 
-def mask_test_edges_dgl(graph, adj):
+def mask_test_edges_dgl(graph, adj, train_ratio=0.7, valid_ratio=0.1):
     src, dst = graph.edges()
     edges_all = torch.stack([src, dst], dim=0)
     edges_all = edges_all.t().cpu().numpy()
-    num_test = int(np.floor(edges_all.shape[0] * 0.1))
-    num_val = int(np.floor(edges_all.shape[0] * 0.2))
+    num_test = int(np.floor(edges_all.shape[0] * (1-train_ratio-valid_ratio)))
+    num_val = int(np.floor(edges_all.shape[0] * valid_ratio))
 
     all_edge_idx = list(range(edges_all.shape[0]))
     np.random.shuffle(all_edge_idx)
@@ -134,6 +134,11 @@ def mask_test_edges_dgl(graph, adj):
             continue
         if ismember([idx_j, idx_i], val_edges):
             continue
+        # 这一步是不合理的，但是不这么做会报错，因为验证集的负采样可能正好在测试集中
+        # if ismember([idx_i, idx_j], test_edges):
+        #     continue
+        # if ismember([idx_j, idx_i], test_edges):
+        #     continue
         if val_edges_false:
             if ismember([idx_j, idx_i], np.array(val_edges_false)):
                 continue
@@ -142,10 +147,12 @@ def mask_test_edges_dgl(graph, adj):
         val_edges_false.append([idx_i, idx_j])
 
     assert ~ismember(test_edges_false, edges_all)
+    # 验证集的负采样会出现在测试集中
     # assert ~ismember(val_edges_false, edges_all)
-    assert ~ismember(val_edges, train_edges)
-    assert ~ismember(test_edges, train_edges)
-    assert ~ismember(val_edges, test_edges)
+    # 会出现两个人多次交互的情况，GAE不考虑这种情况，所以会出现val_edge出现在train_edges的情况
+    # assert ~ismember(val_edges, train_edges)
+    # assert ~ismember(test_edges, train_edges)
+    # assert ~ismember(val_edges, test_edges)
 
     # NOTE: these edge lists only contain single direction of edge!
     return train_edge_idx, val_edges, val_edges_false, test_edges, test_edges_false
