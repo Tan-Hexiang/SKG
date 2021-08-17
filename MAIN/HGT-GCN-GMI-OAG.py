@@ -1,13 +1,14 @@
 # 作为后续模型代码的参考，三个任务都划分了训练集、验证集和测试集，且使用了GMI，训练时增加了负采样和early stopping
 import sys
 sys.path.append('../HGT-DGL')
-sys.path.append('../GAT')
+sys.path.append('../GCN')
 sys.path.append('../GMI')
 import data_process_MAIN
 import data_process_HGT
 # 导入SN模块
-import model_GAT
-import data_process_GAT
+import train_GCN
+import model_GCN
+import data_process_GCN
 
 import time
 
@@ -15,6 +16,7 @@ from model_HGT import *
 from model import *
 import torch
 import numpy as np
+import torch.nn.functional as F
 
 from warnings import filterwarnings
 filterwarnings("ignore")
@@ -22,16 +24,18 @@ filterwarnings("ignore")
 import argparse
 parser = argparse.ArgumentParser(description='SKG')
 parser.add_argument('--learning_rate', type=float, default=0.001, help='Initial learning rate.')
-parser.add_argument('--epochs', '-e', type=int, default=300, help='Number of epochs to train.')
+parser.add_argument('--epochs', '-e', type=int, default=600, help='Number of epochs to train.')
 parser.add_argument('--hidden1', '-h1', type=int, default=32, help='Number of units in hidden layer 1.')
 parser.add_argument('--hidden2', '-h2', type=int, default=16, help='Number of units in hidden layer 2.')
 parser.add_argument('--dim_init', '-h_in', type=int, default=768, help='Dim of initial embedding vector.')
 parser.add_argument('--dim_embed', '-h_out', type=int, default=16, help='Dim of final embedding vector.')
+parser.add_argument("--n-layers", type=int, default=2, help="number of hidden gcn layers")
+parser.add_argument("--weight-decay", type=float, default=5e-4, help="Weight for L2 loss")
 parser.add_argument('--neg_num', type=int, default=1, help='Number of negtive sampling of each node.')
 parser.add_argument('--margin', type=int, default=1, help='The margin of alignment for entities.')
 # parser.add_argument('--align_num', type=int, default=100, help='Number of sampling of aligned node.')
-# 用cos效果好的比较明显，但是实体对齐没有啥变化
-parser.add_argument('--align_dist', type=str, default='L1', help='The type of align nodes distance.',
+# 用cos效果好的比较明显，但是实体对齐没有啥变化。目前效果上，cos>L2>L1
+parser.add_argument('--align_dist', type=str, default='L2', help='The type of align nodes distance.',
                     choices=['L1', 'L2', 'cos'])
 parser.add_argument('--w_KG', type=float, default=1,
                     help='weight for KG link prediction')
@@ -56,23 +60,8 @@ parser.add_argument('--tolerance', type=float, default=1e-3,  help='toleratd mar
 parser.add_argument('--max_round', type=float, default=20,  help='the max round for early stopping')
 # min_epoch后才能开始early stop
 parser.add_argument('--min_epoch', type=float, default=200,  help='the min epoch before early stopping')
-parser.add_argument('--negative-slope', type=float, default=0.2,
-                        help="the negative slope of leaky relu")
-parser.add_argument('--weight-decay', type=float, default=5e-4,
-                        help="weight decay")
-parser.add_argument("--residual", action="store_true", default=False,
-                        help="use residual connection")
-parser.add_argument("--in-drop", type=float, default=.6,
-                        help="input feature dropout")
-parser.add_argument("--attn-drop", type=float, default=.6,
-                        help="attention dropout")
-parser.add_argument("--num-heads", type=int, default=8,
-                    help="number of hidden attention heads")
-# 不加这个最后的结果维度会是正常的num-heads倍
-parser.add_argument("--num-out-heads", type=int, default=1,
-                        help="number of output attention heads")
-parser.add_argument("--num-layers", type=int, default=1,
-                        help="number of hidden layers")
+parser.add_argument("--dropout", type=float, default=0.5, help="dropout probability")
+
 args = parser.parse_args()
 
 if args.cuda != -1:
@@ -124,6 +113,9 @@ def KG_data_prepare():
     #     KG.nodes[ntype].data['feature'] = emb
     #     node_features[ntype] = emb
 
+    # for ntype in KG.ntypes:
+    #     dim_init = KG.nodes[ntype].data['feature'].shape[1]
+    #     break
     KG = KG.to(device)
     model_KG = HGT_PF(KG, args.dim_init, args.hidden1, args.dim_embed, n_layers=2, n_heads=4, use_norm=True).to(device)
     # KG_parameters = KG, 400, 200, 16, 2, 4, True
@@ -163,42 +155,47 @@ def SN_data_prepare():
     SN = dgl.add_self_loop(SN)
 
     if args.cuda < 0:
+        cuda = False
         device = torch.device('cpu')
     else:
+        cuda = True
         device = torch.device("cuda:{}".format(args.cuda))
     SN = SN.to(device)
 
     features = SN.ndata['feature']
-    num_feats = features.shape[1]
+    in_feats = features.shape[1]
+
+    # normalization
+    degs = SN.in_degrees().float()
+    norm = torch.pow(degs, -0.5)
+    norm[torch.isinf(norm)] = 0
+    if cuda:
+        norm = norm.cuda()
+    SN.ndata['norm'] = norm.unsqueeze(1)
 
     adj = SN.adjacency_matrix().to_dense().to(device)
-    weight_tensor, norm = data_process_GAT.compute_loss_para(adj, device)
-    train_edge_idx, val_edges_SN, val_edges_false_SN, test_edges_SN, test_edges_false_SN = \
-        data_process_GAT.mask_test_edges_dgl(SN, adj, args.train_ratio, args.valid_ratio)
+    weight_tensor, norm = data_process_GCN.compute_loss_para(adj, device)
+    train_edge_idx, val_edges_SN, val_edges_false_SN, test_edges_SN, test_edges_false_SN = data_process_GCN.mask_test_edges_dgl(SN, adj, args.train_ratio, args.valid_ratio)
     train_edge_idx = torch.tensor(train_edge_idx).to(device)
     train_SN = dgl.edge_subgraph(SN, train_edge_idx, preserve_nodes=True).to(device)
     train_SN = train_SN.to(device)
     print(train_SN)
 
-    # create model
-    heads = [args.num_heads] * (args.num_layers-1)+[args.num_out_heads]
-    model_SN = model_GAT.GAT_PF(train_SN,
-                   args.num_layers,
-                   num_feats,
+    # create GCN model
+    model_SN = model_GCN.GCN_PF(train_SN,
+                   in_feats,
                    args.dim_embed,
-                   heads,
-                   F.elu,
-                   args.in_drop,
-                   args.attn_drop,
-                   args.negative_slope,
-                   args.residual)
+                   args.n_layers,
+                   F.relu,
+                   args.dropout)
     model_SN = model_SN.to(device)
+    # SN, model_SN, feats, val_edges_SN, val_edges_false_SN, test_edges_SN, test_edges_false_SN, SN_forward, SN_backward
     return train_SN, model_SN, features, val_edges_SN, val_edges_false_SN, test_edges_SN, test_edges_false_SN, SN_forward, SN_backward
 
-
     # use optimizer
-    optimizer = torch.optim.Adam(
-        model_SN.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+    optimizer = torch.optim.Adam(model_SN.parameters(),
+                                 lr=args.learning_rate,
+                                 weight_decay=args.weight_decay)
 
     # initialize graph
     for epoch in range(args.epochs):
@@ -206,30 +203,27 @@ def SN_data_prepare():
         model_SN.train()
 
         # forward
-        logits, embeds = model_SN(features)
+        logits, embeds, _ = model_SN(features)
         loss = norm * F.binary_cross_entropy(logits.view(-1), adj.view(-1), weight=weight_tensor)
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        train_acc = data_process_GCN.get_acc(logits, adj)
 
-        train_acc = data_process_GAT.get_acc(logits, adj)
-
-        val_roc, val_ap = data_process_GAT.get_scores(val_edges_SN, val_edges_false_SN, logits)
+        val_roc, val_ap = data_process_GCN.get_scores(val_edges_SN, val_edges_false_SN, logits)
 
         # Print out performance
         print("Epoch:", '%04d' % (epoch + 1), "train_loss=", "{:.5f}".format(loss.item()), "train_acc=",
               "{:.5f}".format(train_acc), "val_roc=", "{:.5f}".format(val_roc), "val_ap=", "{:.5f}".format(val_ap),
               "time=", "{:.5f}".format(time.time() - t))
-    test_roc, test_ap = data_process_GAT.get_scores(test_edges_SN, test_edges_false_SN, logits)
-
-    # Print out performance
+    test_roc, test_ap = data_process_GCN.get_scores(test_edges_SN, test_edges_false_SN, logits)
     print("Epoch:", '%04d' % (epoch + 1), "train_loss=", "{:.5f}".format(loss.item()), "train_acc=",
           "{:.5f}".format(train_acc), "test_roc=", "{:.5f}".format(test_roc), "test_ap=", "{:.5f}".format(test_ap),
           "time=", "{:.5f}".format(time.time() - t))
 
 if __name__ == '__main__':
-    # KG_data_prepare()
+    # SN_data_prepare()
     # exit()
     # KG, KG_parameters, triplet, val_edges, val_edges_false, test_edges, test_edges_false = KG_data_prepare()
     KG, model_KG, triplet, val_edges_KG, val_edges_false_KG, test_edges_KG, test_edges_false_KG, KG_forward, KG_backward = KG_data_prepare()
@@ -268,9 +262,9 @@ if __name__ == '__main__':
     # print(torch.cat((node_align_KG_valid, node_align_KG_test), 0))
 
     adj_SN = SN.adjacency_matrix().to_dense().to(device)
-    weight_tensor_SN, norm_SN = data_process_GAT.compute_loss_para(adj_SN, device)
+    weight_tensor_SN, norm_SN = data_process_GCN.compute_loss_para(adj_SN, device)
 
-    model = Model_HGT_GAT_GMI(model_KG, model_SN, args.dim_init, args.dim_embed).to(device)
+    model = Model_HGT_GCN_GMI(model_KG, model_SN, args.dim_init, args.dim_embed).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters())
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, total_steps=args.epochs, max_lr=1e-3, pct_start=0.05)
@@ -346,8 +340,8 @@ if __name__ == '__main__':
             train_acc_KG = data_process_HGT.get_acc(pos_score, neg_score)
             val_roc_KG, val_ap_KG = data_process_HGT.get_score(KG, val_edges_KG, val_edges_false_KG, triplet)
             # 社交网络链接预测的结果
-            train_acc_SN = data_process_GAT.get_acc(logits, adj_SN)
-            val_roc_SN, val_ap_SN = data_process_GAT.get_scores(val_edges_SN, val_edges_false_SN, logits)
+            train_acc_SN = data_process_GCN.get_acc(logits, adj_SN)
+            val_roc_SN, val_ap_SN = data_process_GCN.get_scores(val_edges_SN, val_edges_false_SN, logits)
             # 实体对齐的指标MRR，hits@10
             # 知识图谱的节点向量KG.nodes['author'].data['h'][node_align_KG_train]
             # 社交网络的节点向量trans_SN[node_align_SN_train]
@@ -371,7 +365,7 @@ if __name__ == '__main__':
 
     model(KG, negative_graph, triplet, SN, feats, adj_SN, args.neg_num, device)
     test_roc_KG, test_ap_KG = data_process_HGT.get_score(KG, test_edges_KG, test_edges_false_KG, triplet)
-    test_roc_SN, test_ap_SN = data_process_GAT.get_scores(test_edges_SN, test_edges_false_SN, logits)
+    test_roc_SN, test_ap_SN = data_process_GCN.get_scores(test_edges_SN, test_edges_false_SN, logits)
     test_MRR_align, test_hits5_align = data_process_MAIN.align_scores(KG.nodes['author'].data['h'], trans_SN,
                                                                node_align_KG_valid,
                                                                node_align_SN_valid, 5, args.align_dist)
