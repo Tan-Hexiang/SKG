@@ -88,34 +88,42 @@ class HGTLayer(nn.Module):
             self.__class__.__name__, self.in_dim, self.out_dim,
             self.num_types, self.num_relations)
                 
-class HGT(nn.Module):
-    def __init__(self, G, n_inp, n_hid, n_out, n_layers, n_heads, use_norm = True):
-        super(HGT, self).__init__()
+class HGT_NC(nn.Module):
+    def __init__(self, G, in_dim, hidden_dim, out_dim, n_layers, n_heads, use_norm = True):
+        super(HGT_NC, self).__init__()
+        self.g = G
         self.gcs = nn.ModuleList()
-        self.n_inp = n_inp
-        self.n_hid = n_hid
-        self.n_out = n_out
+        self.in_dim = in_dim
+        self.hidden_dim = hidden_dim
+        self.out_dim = out_dim
         self.n_layers = n_layers
         self.adapt_ws  = nn.ModuleList()
         for t in range(len(G.node_dict)):
-            self.adapt_ws.append(nn.Linear(n_inp,   n_hid))
+            self.adapt_ws.append(nn.Linear(in_dim, hidden_dim))
         for _ in range(n_layers):
-            self.gcs.append(HGTLayer(n_hid, n_hid, len(G.node_dict), len(G.edge_dict), n_heads, use_norm = use_norm))
-        self.out = nn.Linear(n_hid, n_out)
+            self.gcs.append(HGTLayer(hidden_dim, hidden_dim, len(G.node_dict), len(G.edge_dict), n_heads, use_norm = use_norm))
+        self.out = nn.Linear(hidden_dim, out_dim)
+        # 相当于SN中对每个节点的线性变换
+        self.fc = nn.Linear(in_dim, hidden_dim, bias=False)
 
-    def forward(self, G, out_key):
+    def forward(self):
         # out_key表示对哪类节点做分类
         # 最终返回每个节点是每类标签的概率
-        for ntype in G.ntypes:
-            n_id = G.node_dict[ntype]
-            G.nodes[ntype].data['h'] = torch.tanh(self.adapt_ws[n_id](G.nodes[ntype].data['inp']))
+        for ntype in self.g.ntypes:
+            n_id = self.g.node_dict[ntype]
+            self.g.nodes[ntype].data['h'] = torch.tanh(self.adapt_ws[n_id](self.g.nodes[ntype].data['feature']))
         for i in range(self.n_layers):
-            self.gcs[i](G, 'h', 'h')
-        return self.out(G.nodes[out_key].data['h'])
+            self.gcs[i](self.g, 'h', 'h')
+        # 输出所有类型的节点的分类结果，其中只有一类节点是有效分类
+        output = {}
+        for ntype in self.g.ntypes:
+            output[ntype] = self.out(self.g.nodes[ntype].data['h'])
+            self.g.nodes[ntype].data['w'] = self.fc(self.g.nodes[ntype].data['feature'])
+        return output
     def __repr__(self):
-        return '{}(n_inp={}, n_hid={}, n_out={}, n_layers={})'.format(
-            self.__class__.__name__, self.n_inp, self.n_hid,
-            self.n_out, self.n_layers)
+        return '{}(in_dim={}, hidden_dim={}, out_dim={}, n_layers={})'.format(
+            self.__class__.__name__, self.in_dim, self.hidden_dim,
+            self.out_dim, self.n_layers)
 
 class HeteroDotProductPredictor(nn.Module):
     def forward(self, graph, h, etype):
@@ -127,28 +135,30 @@ class HeteroDotProductPredictor(nn.Module):
             # graph.edges[etype].data['score'] = torch.sigmoid(graph.edges[etype].data['score'])
             return graph.edges[etype].data['score']
 
-class HGT_PF(nn.Module):
-    def __init__(self, G, in_features, hidden_features, out_features, n_layers, n_heads, use_norm = True):
-        super(HGT_PF, self).__init__()
+class HGT_LP(nn.Module):
+    def __init__(self, G, in_dim, hidden_dim, out_dim, n_layers, n_heads, use_norm = True):
+        super(HGT_LP, self).__init__()
+        self.g = G
         self.gcs = nn.ModuleList()
-        self.n_in = in_features
-        self.n_hid = hidden_features
-        self.n_out = out_features
+        self.in_dim = in_dim
+        self.hidden_dim = hidden_dim
+        self.out_dim = out_dim
         self.n_layers = n_layers
         self.adapt_ws  = nn.ModuleList()
         # 每类节点做映射
         for t in range(len(G.node_dict)):
-            self.adapt_ws.append(nn.Linear(in_features, hidden_features))
+            self.adapt_ws.append(nn.Linear(in_dim, hidden_dim))
         for _ in range(n_layers):
-            self.gcs.append(HGTLayer(hidden_features, hidden_features, len(G.node_dict), len(G.edge_dict), n_heads, use_norm = use_norm))
+            self.gcs.append(HGTLayer(hidden_dim, hidden_dim, len(G.node_dict), len(G.edge_dict), n_heads, use_norm = use_norm))
         # 这里可以给每类节点一个单独的映射矩阵
-        self.out = nn.Linear(hidden_features, out_features)
+        self.out = nn.Linear(hidden_dim, out_dim)
         self.pred = HeteroDotProductPredictor()
         # 相当于SN中对每个节点的线性变换
-        self.fc = nn.Linear(in_features, out_features, bias=False)
+        self.fc = nn.Linear(in_dim, out_dim, bias=False)
 
-    def forward(self, G, nega_G, etype):
+    def forward(self, nega_G, etype):
         # etype表示对哪类边做分类
+        G = self.g
         for ntype in G.ntypes:
             n_id = G.node_dict[ntype]
             # 'h'表示隐状态向量，n_id表示使用第几个映射矩阵
@@ -163,6 +173,6 @@ class HGT_PF(nn.Module):
         return self.pred(G, h, etype), self.pred(nega_G, h, etype)
 
     def __repr__(self):
-        return '{}(n_inp={}, n_hid={}, n_out={}, n_layers={})'.format(
-            self.__class__.__name__, self.n_inp, self.n_hid,
-            self.n_out, self.n_layers)
+        return '{}(in_dim={}, hidden_dim={}, out_dim={}, n_layers={})'.format(
+            self.__class__.__name__, self.in_dim, self.hidden_dim,
+            self.out_dim, self.n_layers)
