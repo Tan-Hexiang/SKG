@@ -9,25 +9,26 @@ import torch.nn as nn
 from dgl.nn.pytorch import GraphConv
 import dgl
 
-class GCN(nn.Module):
+class GCN_NC(nn.Module):
     def __init__(self,
                  g,
-                 in_feats,
-                 n_hidden,
-                 n_classes,
+                 in_dim,
+                 hidden_dim,
+                 out_dim,
                  n_layers,
                  activation,
                  dropout):
-        super(GCN, self).__init__()
+        super(GCN_NC, self).__init__()
         self.g = g
         self.layers = nn.ModuleList()
         # input layer
-        self.layers.append(GraphConv(in_feats, n_hidden, activation=activation))
+        self.layers.append(GraphConv(in_dim, hidden_dim, activation=activation))
         # hidden layers
         for i in range(n_layers - 1):
-            self.layers.append(GraphConv(n_hidden, n_hidden, activation=activation))
+            self.layers.append(GraphConv(hidden_dim, hidden_dim, activation=activation))
         # output layer
-        self.layers.append(GraphConv(n_hidden, n_classes))
+        self.output = GraphConv(hidden_dim, out_dim)
+        self.fc = nn.Linear(in_dim, hidden_dim, bias=False)
         self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, features):
@@ -36,7 +37,9 @@ class GCN(nn.Module):
             if i != 0:
                 h = self.dropout(h)
             h = layer(self.g, h)
-        return h
+        logits = self.output(self.g, h)
+        seq_fts = self.fc(features)
+        return logits, h, seq_fts
 
 class HeteroDotProductPredictor(nn.Module):
     def forward(self, graph, h, etype):
@@ -48,23 +51,24 @@ class HeteroDotProductPredictor(nn.Module):
             # graph.edges[etype].data['score'] = torch.sigmoid(graph.edges[etype].data['score'])
             return graph.edges[etype].data['score']
 
-class GCN_PF(nn.Module):
+class GCN_LP(nn.Module):
     def __init__(self,
                  g,
-                 in_feats,
-                 n_hidden,
+                 in_dim,
+                 hidden_dim,
                  n_layers,
                  activation,
                  dropout):
-        super(GCN_PF, self).__init__()
+        super(GCN_LP, self).__init__()
         self.g = g
         self.layers = nn.ModuleList()
         # input layer
-        self.layers.append(GraphConv(in_feats, n_hidden, activation=activation,allow_zero_in_degree=True))
+        self.layers.append(GraphConv(in_dim, hidden_dim, activation=activation,allow_zero_in_degree=True))
         # hidden layers
         for i in range(n_layers):
-            self.layers.append(GraphConv(n_hidden, n_hidden, activation=activation, allow_zero_in_degree=True))
+            self.layers.append(GraphConv(hidden_dim, hidden_dim, activation=activation, allow_zero_in_degree=True))
         self.dropout = nn.Dropout(p=dropout)
+        self.fc = nn.Linear(in_dim, hidden_dim, bias=False)
 
     def forward(self, features):
         h = features
@@ -73,4 +77,6 @@ class GCN_PF(nn.Module):
                 h = self.dropout(h)
             h = layer(self.g, h)
         adj_rec = torch.sigmoid(torch.matmul(h, h.t()))
-        return adj_rec, h
+        # 将特征进行线性变换，用来进行对比学习
+        seq_fts = self.fc(features)
+        return adj_rec, h, seq_fts

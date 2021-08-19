@@ -7,10 +7,10 @@ import dgl
 from dgl.data import CoraGraphDataset, CiteseerGraphDataset, PubmedGraphDataset
 import sys
 sys.path.append('../MAIN')
-# sys.path.append('../GAE')
-from data_process import *
+import data_process_MAIN
+from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
 
-from model_GCN import *
+import model_GCN
 import data_process_GCN
 #from gcn_mp import GCN
 #from gcn_spmv import GCN
@@ -29,44 +29,34 @@ def evaluate(model, features, labels, mask):
 
 def main_NC(args):
     # load and preprocess dataset
-    if args.dataset == 'cora':
-        data = CoraGraphDataset()
-    elif args.dataset == 'citeseer':
-        data = CiteseerGraphDataset()
-    elif args.dataset == 'pubmed':
-        data = PubmedGraphDataset()
-    else:
-        raise ValueError('Unknown dataset: {}'.format(args.dataset))
-    print(data[0])
+    # if args.dataset == 'cora':
+    #     data = CoraGraphDataset()
+    # elif args.dataset == 'citeseer':
+    #     data = CiteseerGraphDataset()
+    # elif args.dataset == 'pubmed':
+    #     data = PubmedGraphDataset()
+    # else:
+    #     raise ValueError('Unknown dataset: {}'.format(args.dataset))
+    # print(data[0])
+    #
+    #
+    # g = data[0]
 
-
-    g = data[0]
+    g, _, _ = data_process_MAIN.OAG_SN_ReadData_NC(args)
     if args.gpu < 0:
         cuda = False
     else:
         cuda = True
         g = g.int().to(args.gpu)
-
-    features = g.ndata['feat']
+    features = g.ndata['feature']
 
     # 这个是做节点分类的，所以mask在节点上
     labels = g.ndata['label']
     train_mask = g.ndata['train_mask']
-    val_mask = g.ndata['val_mask']
+    val_mask = g.ndata['valid_mask']
     test_mask = g.ndata['test_mask']
     in_feats = features.shape[1]
-    n_classes = data.num_labels
-    n_edges = data.graph.number_of_edges()
-    print("""----Data statistics------'
-      #Edges %d
-      #Classes %d
-      #Train samples %d
-      #Val samples %d
-      #Test samples %d""" %
-          (n_edges, n_classes,
-              train_mask.int().sum().item(),
-              val_mask.int().sum().item(),
-              test_mask.int().sum().item()))
+    n_classes = labels.shape[1]
     # exit()
     # g = OAG_SN_ReadData()
     # features = g.ndata['feature']
@@ -87,7 +77,7 @@ def main_NC(args):
     g.ndata['norm'] = norm.unsqueeze(1)
 
     # create GCN model
-    model = GCN(g,
+    model = model_GCN.GCN_NC(g,
                 in_feats,
                 args.n_hidden,
                 n_classes,
@@ -97,7 +87,8 @@ def main_NC(args):
 
     if cuda:
         model.cuda()
-    loss_fcn = torch.nn.CrossEntropyLoss()
+    # loss_fcn = torch.nn.CrossEntropyLoss()
+    crition_KG = torch.nn.BCEWithLogitsLoss()
 
     # use optimizer
     optimizer = torch.optim.Adam(model.parameters(),
@@ -111,8 +102,8 @@ def main_NC(args):
         if epoch >= 3:
             t0 = time.time()
         # forward
-        logits = model(features)
-        loss = loss_fcn(logits[train_mask], labels[train_mask])
+        logits, _, _ = model(features)
+        loss = crition_KG(logits[train_mask], labels[train_mask])
 
         optimizer.zero_grad()
         loss.backward()
@@ -121,10 +112,19 @@ def main_NC(args):
         if epoch >= 3:
             dur.append(time.time() - t0)
 
-        acc = evaluate(model, features, labels, val_mask)
-        print("Epoch {:05d} | Time(s) {:.4f} | Loss {:.4f} | Accuracy {:.4f} | "
-              "ETputs(KTEPS) {:.2f}". format(epoch, np.mean(dur), loss.item(),
-                                             acc, n_edges / np.mean(dur) / 1000))
+            # 多标签分类评价指标
+            logits = torch.sigmoid(logits)
+            label = labels[train_mask].cpu().detach().numpy().reshape(1, -1)[0]
+            pred = logits[train_mask].cpu().detach().numpy().reshape(1, -1)[0]
+            roc_score = roc_auc_score(label, pred)
+            ap_score = average_precision_score(labels[train_mask].cpu().detach().numpy(),
+                                               logits[train_mask].cpu().detach().numpy())
+            # f1_score的输入数据应该全都是0/1，不能有小数
+            micro_f1_train = f1_score(labels[train_mask].cpu().detach().numpy(),
+                                      logits[train_mask].cpu().detach().numpy() > 0.5, average="micro")
+            macro_f1_train = f1_score(labels[train_mask].cpu().detach().numpy(),
+                                      logits[train_mask].cpu().detach().numpy() > 0.5, average="macro")
+            print('train:', roc_score, ap_score, micro_f1_train, macro_f1_train)
 
     print()
     acc = evaluate(model, features, labels, test_mask)
@@ -132,7 +132,7 @@ def main_NC(args):
 
 # load and preprocess dataset
 def main_LP(args):
-    g, _, _ = OAG_SN_ReadData()
+    g, _, _ = data_process_MAIN.OAG_SN_ReadData_LP()
     # add self loop，因为图中包含入度为0的节点
     if args.self_loop:
         g = dgl.remove_self_loop(g)
@@ -166,7 +166,7 @@ def main_LP(args):
     print(train_SN)
 
     # create GCN model
-    model = GCN_PF(train_SN,
+    model = model_GCN.GCN_LP(train_SN,
                    in_feats,
                    args.n_hidden,
                    args.n_layers,
@@ -230,4 +230,4 @@ if __name__ == '__main__':
     args = parser.parse_args()
     print(args)
 
-    main_LP(args)
+    main_NC(args)
