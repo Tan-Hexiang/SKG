@@ -369,3 +369,51 @@ class Model_KG_LP(nn.Module):
         trans_SN = self.translation(embed_SN)
         return pred_pos, pred_neg, res_mi_KG, res_local_KG, adj_rec, embed_SN, trans_SN, res_mi_SN, res_local_SN
 
+class Model_SN_NC(nn.Module):
+    def __init__(self, model_KG, model_SN, in_dim, hidden_dim):
+        super(Model_SN_NC, self).__init__()
+        # KG和SN的向量编码
+        self.model_KG = model_KG
+        self.model_SN = model_SN
+        # SN的对比学习和互信息部分
+        self.prelu = nn.PReLU()
+        self.disc1 = Discriminator(in_dim, hidden_dim)
+        self.disc2 = Discriminator(hidden_dim, hidden_dim)
+        # 翻译层，将社交网络的向量转移到知识图谱的向量空间中
+        self.translation = nn.Linear(hidden_dim, hidden_dim)
+        self.avg_neighbor = AvgNeighbor()
+
+    def forward(self, KG, nega_KG, etype, SN, features_SN, neg_num, device):
+        pred_pos, pred_neg = self.model_KG(nega_KG, etype)
+        # KG部分的对比学习
+        # 对比学习是否只比较同类节点，这里将知识图谱转成同质图，即不考虑节点类型和边的类型。节点数量太多，邻接矩阵可能会炸
+        # 保存节点的隐状态和线性变化向量
+        HKG = dgl.to_homogeneous(KG, ndata=['h', 'w', 'feature'])
+        # print(HKG)
+        adj_KG = HKG.adjacency_matrix().to_dense().to(device)
+        features_KG = HKG.ndata['feature']
+        h_w_KG = HKG.ndata['w']
+        embed_KG = HKG.ndata['h']
+        h_neighbour_KG = self.prelu(self.avg_neighbor(h_w_KG, adj_KG))
+        h_neighbour_KG = torch.squeeze(h_neighbour_KG, 0)
+        """FMI (X_i consists of the node i itself and its neighbors)"""
+        # I(h_i; x_i)
+        res_mi_KG = self.disc1(embed_KG, features_KG, process_GMI.negative_sampling(adj_KG, neg_num))
+        # I(h_i; x_j) node j is a neighbor
+        res_local_KG = self.disc2(h_neighbour_KG, embed_KG, process_GMI.negative_sampling(adj_KG, neg_num))
+
+        logits_SN, embed_SN, h_w_SN = self.model_SN(features_SN)
+        # SN部分的对比学习
+        adj_SN = SN.adjacency_matrix().to_dense().to(device)
+        h_neighbour_SN = self.prelu(self.avg_neighbor(h_w_SN, adj_SN))
+        h_neighbour_SN = torch.squeeze(h_neighbour_SN, 0)
+        """FMI (X_i consists of the node i itself and its neighbors)"""
+        # I(h_i; x_i)
+        res_mi_SN = self.disc1(embed_SN, features_SN, process_GMI.negative_sampling(adj_SN, neg_num))
+        # I(h_i; x_j) node j is a neighbor
+        # print(embed_SN.shape, h_w_SN.shape)
+        res_local_SN = self.disc2(h_neighbour_SN, embed_SN, process_GMI.negative_sampling(adj_SN, neg_num))
+        # 将社交网络的节点表示翻译到知识图谱的向量空间中
+        trans_SN = self.translation(embed_SN)
+        return pred_pos, pred_neg, res_mi_KG, res_local_KG, logits_SN, embed_SN, trans_SN, res_mi_SN, res_local_SN
+

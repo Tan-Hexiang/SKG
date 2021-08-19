@@ -333,8 +333,8 @@ def OAG_SN_ReadData_LP(args=None):
     g.edata['feature'] = emb
     return g, author_forward, author_backward
 
-def OAG_SN_ReadData_NC():
-    # 生成节点分类的数据集，需要将一类连接转成节点的label
+def OAG_SN_ReadData_NC(args=None):
+    # 生成节点分类的数据集，需要将KG的
     # 读取node_feature
     graph = dill.load(open('../../../jiangxuhui/Project/pyHGT/dataset/oag_output/graph_ML.pk', 'rb'))
 
@@ -342,7 +342,6 @@ def OAG_SN_ReadData_NC():
     # forward表示从dgl的id转成以前的id，backward表示从原本的节点id转成当前的dgl图id
     author_forward, author_backward = {}, {}
 
-    # 这里需要将节点的id进行转化，变成从0开始的节点
     with open(os.path.join(dir_path, 'author_author.txt'), 'r') as fr:
         lines = fr.readlines()
         author_ids1 = []
@@ -365,9 +364,6 @@ def OAG_SN_ReadData_NC():
     g = dgl.graph((torch.tensor(author_ids1), torch.tensor(author_ids2)))
 
     # 设置每个节点的特征向量
-    # 输出DataFrame的列名
-    # print(graph.node_feature['author'].columns.values.tolist())
-    # 节点的初始尺寸都是768
     author_features = []
     for author_id in author_backward.keys():
         author_feature = np.array(graph.node_feature['author'].loc[author_id, 'emb'])
@@ -375,57 +371,44 @@ def OAG_SN_ReadData_NC():
     author_features = torch.tensor(author_features, dtype=torch.float32)
     g.ndata['feature'] = author_features
 
+
+    # 给SN中的节点打标签，需要使用KG的信息
+    SN_forward, SN_backward = author_forward, author_backward
+    KG, KG_forward, KG_backward = OAG_KG_ReadData_NC(args)
+    nodes = set(KG_forward.values()) & set(SN_forward.values())
+    nodes_tmp = [KG_backward[node] for node in nodes]
+    # 这里nodes保存的是KG中的节点id
+    nodes_KG = np.array(nodes_tmp)
+    nodes_SN = [SN_backward[KG_forward[node]] for node in nodes_KG]
+    labels = torch.zeros((g.num_nodes(), KG.nodes['author'].data['label'].shape[1]), dtype=torch.float32)
+    for node_SN, node_KG in zip(nodes_SN, nodes_KG):
+        labels[node_SN] = KG.nodes['author'].data['label'][node_KG]
+        # print(labels[node_SN])
+        # print(KG.nodes['author'].data['label'][node_KG])
+    g.ndata['label'] = labels
+
+    # 划分数据集
+    np.random.shuffle(nodes_SN)
+    train_idx = int(len(nodes_SN) * args.train_ratio)
+    valid_idx = int(len(nodes_SN) * (args.train_ratio + args.valid_ratio))
+    node_SN_train = nodes_SN[:train_idx]
+    node_SN_valid = nodes_SN[train_idx:valid_idx]
+    node_SN_test = nodes_SN[valid_idx:]
+    train_mask = torch.zeros(g.num_nodes(), dtype=torch.bool)
+    valid_mask = torch.zeros(g.num_nodes(), dtype=torch.bool)
+    test_mask = torch.zeros(g.num_nodes(), dtype=torch.bool)
+    train_mask[node_SN_train] = True
+    valid_mask[node_SN_valid] = True
+    test_mask[node_SN_test] = True
+
+    # print(train_mask | valid_mask | test_mask) # 有True有False，这里的True就是有label的节点，False是没有label的节点
+    # print((train_mask | valid_mask | test_mask).sum()) # 应该是对齐节点的数量
+    # print(train_mask & valid_mask & test_mask) # 全是False
+    g.ndata['train_mask'] = train_mask
+    g.ndata['valid_mask'] = valid_mask
+    g.ndata['test_mask'] = test_mask
+
     return g, author_forward, author_backward
-
-# 判断训练是否收敛，提前终止
-class EarlyStopMonitor(object):
-    """
-    example:
-    early_stopper = EarlyStopMonitor(tolerance=TOLERANCE)
-    if early_stopper.early_stop_check(val_ap):
-        logger.info('No improvment over {} epochs, stop training'.format(early_stopper.max_round))
-        logger.info(f'Loading the best model at epoch {early_stopper.best_epoch}')
-        best_checkpoint_path = model.get_checkpoint_path(early_stopper.best_epoch)
-        model.load_state_dict(torch.load(best_checkpoint_path))
-        logger.info(f'Loaded the best model at epoch {early_stopper.best_epoch} for inference')
-        model.eval()
-        break
-    else:
-        torch.save(model.state_dict(), model.get_checkpoint_path(epoch))
-    """
-    def __init__(self, max_round=20, min_epoch=150, higher_better=True, tolerance=1e-3):
-        self.max_round = max_round
-        # 因为模型训练较慢，前期效果非常不稳定，所以必须强制要求训练一定轮数
-        self.min_epoch = min_epoch
-        self.num_round = 0
-
-        self.epoch_count = 1
-        self.best_epoch = 1
-
-        self.last_best = None
-        self.higher_better = higher_better
-        self.tolerance = tolerance
-        self.model = None
-
-    def early_stop_check(self, curr_val, model=None):
-        # 当前的指标是越高越好还是越低越好
-        # 如果不是越高越好，就把当前的值乘-1，变成越高越好
-        if not self.higher_better:
-            curr_val *= -1
-        if self.last_best is None:
-            self.last_best = curr_val
-            self.model = model
-        # 如果提升达到tolerance，就保存当前结果
-        elif (curr_val - self.last_best) / np.abs(self.last_best) > self.tolerance:
-            self.last_best = curr_val
-            self.num_round = 0
-            self.best_epoch = self.epoch_count
-            self.model = model
-        else:
-            self.num_round += 1
-        self.epoch_count += 1
-
-        return self.num_round >= self.max_round and self.epoch_count > self.min_epoch
 
 def WDT_KG_ReadData_LP(args):
     dir_path = '../dataset/WDT'
@@ -537,6 +520,7 @@ def WDT_SN_ReadData_LP(args):
     twitter_ids1, twitter_ids2 = [], []
     # 采样的初始节点
     seeds = []
+    # 统计每个节点的度
 
     for label_name in labels:
         with open(os.path.join(dir_path, label_name, 'follower_relation.txt'), 'r') as fr:
@@ -670,6 +654,55 @@ def node_align_split(args, KG_forward, KG_backward, SN_forward, SN_backward, dev
     return node_align_KG_train, node_align_KG_valid, node_align_KG_test, \
            node_align_SN_train, node_align_SN_valid, node_align_SN_test
 
+# 判断训练是否收敛，提前终止
+class EarlyStopMonitor(object):
+    """
+    example:
+    early_stopper = EarlyStopMonitor(tolerance=TOLERANCE)
+    if early_stopper.early_stop_check(val_ap):
+        logger.info('No improvment over {} epochs, stop training'.format(early_stopper.max_round))
+        logger.info(f'Loading the best model at epoch {early_stopper.best_epoch}')
+        best_checkpoint_path = model.get_checkpoint_path(early_stopper.best_epoch)
+        model.load_state_dict(torch.load(best_checkpoint_path))
+        logger.info(f'Loaded the best model at epoch {early_stopper.best_epoch} for inference')
+        model.eval()
+        break
+    else:
+        torch.save(model.state_dict(), model.get_checkpoint_path(epoch))
+    """
+    def __init__(self, max_round=20, min_epoch=150, higher_better=True, tolerance=1e-3):
+        self.max_round = max_round
+        # 因为模型训练较慢，前期效果非常不稳定，所以必须强制要求训练一定轮数
+        self.min_epoch = min_epoch
+        self.num_round = 0
+
+        self.epoch_count = 1
+        self.best_epoch = 1
+
+        self.last_best = None
+        self.higher_better = higher_better
+        self.tolerance = tolerance
+        self.model = None
+
+    def early_stop_check(self, curr_val, model=None):
+        # 当前的指标是越高越好还是越低越好
+        # 如果不是越高越好，就把当前的值乘-1，变成越高越好
+        if not self.higher_better:
+            curr_val *= -1
+        if self.last_best is None:
+            self.last_best = curr_val
+            self.model = model
+        # 如果提升达到tolerance，就保存当前结果
+        elif (curr_val - self.last_best) / np.abs(self.last_best) > self.tolerance:
+            self.last_best = curr_val
+            self.num_round = 0
+            self.best_epoch = self.epoch_count
+            self.model = model
+        else:
+            self.num_round += 1
+        self.epoch_count += 1
+
+        return self.num_round >= self.max_round and self.epoch_count > self.min_epoch
 
 
 if __name__ == '__main__':
@@ -698,5 +731,7 @@ if __name__ == '__main__':
     # node_align(args, KG_backward, SN_backward)
 
     # 测试节点分类的标签和数据集mask
-    OAG_KG_ReadData_NC(args)
+    # OAG_KG_ReadData_NC(args)
 
+    # 测试SN节点分类数据
+    OAG_SN_ReadData_NC(args)

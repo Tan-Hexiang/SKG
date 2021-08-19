@@ -1,5 +1,5 @@
 import torch
-from sklearn.metrics import roc_auc_score, average_precision_score
+from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
 import os
 import dgl
 import numpy as np
@@ -114,3 +114,17 @@ def get_acc_LP(adj_rec, adj_label):
     preds_all = (adj_rec > 0.5).view(-1).long()
     accuracy = (preds_all == labels_all).sum().float() / labels_all.size(0)
     return float(accuracy)
+
+def get_score_NC(logits, labels, idx):
+    logits = torch.sigmoid(logits)
+    label = labels[idx].cpu().detach().numpy().reshape(1, -1)[0]
+    pred = logits[idx].cpu().detach().numpy().reshape(1, -1)[0]
+    roc_score = roc_auc_score(label, pred)
+    ap_score = average_precision_score(labels[idx].cpu().detach().numpy(),
+                                       logits[idx].cpu().detach().numpy())
+    # f1_score的输入数据应该全都是0/1，不能有小数
+    micro_f1 = f1_score(labels[idx].cpu().detach().numpy(),
+                              logits[idx].cpu().detach().numpy() > 0.5, average="micro")
+    macro_f1 = f1_score(labels[idx].cpu().detach().numpy(),
+                              logits[idx].cpu().detach().numpy() > 0.5, average="macro")
+    return micro_f1, macro_f1, roc_score, ap_score

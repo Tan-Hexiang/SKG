@@ -1,7 +1,6 @@
 import argparse
 import sys
 
-
 def get_args():
     parser = argparse.ArgumentParser('SKG')
     parser.add_argument('--dataset', type=str, default='OAG',
@@ -10,14 +9,14 @@ def get_args():
     parser.add_argument('--KG_model', type=str, default='HGT',
                         choices=['RGCN', 'HGT'],
                         help='The model for KG embedding.')
-    parser.add_argument('--SN_model', type=str, default='GCN',
+    parser.add_argument('--SN_model', type=str, default='GAT',
                         choices=['GCN', 'GAT', 'GAE'],
                         help='The model for SN embedding.')
     # 用cos效果好的比较明显，但是实体对齐没有啥变化
     parser.add_argument('--align_dist', type=str, default='L1',
                         help='The type of align nodes distance.',
                         choices=['L1', 'L2', 'cos'])
-    parser.add_argument('--task', type=str, default='Align',
+    parser.add_argument('--task', type=str, default='SN_NC',
                         # NC:Node Classification, LP:Link Prediction
                         choices=['KG_NC', 'KG_LP', 'SN_NC', 'SN_LP', 'Align'],
                         help='The main task.')
@@ -27,19 +26,25 @@ def get_args():
                         help='Number of epochs to train.')
     parser.add_argument('--in_dim', type=int, default=768,
                         help='Dim of input embedding vector.')
+    # 隐藏层向量维度
     parser.add_argument('--hidden_dim', type=int, default=32,
                         help='Number of units in hidden layer.')
+    # 输出向量维度，LP中都使用hidden_dim作为输出维度，NC中使用n_classes，很少使用这个维度
     parser.add_argument('--out_dim', type=int, default=32,
                         help='Dim of output embedding vector.')
+    # 负采样的比例
     parser.add_argument('--neg_num', type=int, default=1,
                         help='Number of negtive sampling of each node.')
+    # margin-loss的margin
     parser.add_argument('--margin', type=int, default=1,
                         help='The margin of alignment for entities.')
     # 实体对齐参数
     parser.add_argument('--align_sample', type=int, default=10,
                         help='the sample number in align evaluation, head and tail for twice')
+    # hits@X的X
     parser.add_argument('--hits_num', type=int, default=10,
                         help='hits@num')
+    # 各个损失函数的权重
     parser.add_argument('--w_KG', type=float, default=1,
                         help='weight for KG downstream task')
     parser.add_argument('--w_SN', type=float, default=0.5,
