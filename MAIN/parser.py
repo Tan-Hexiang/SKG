@@ -7,36 +7,36 @@ def get_args():
                         choices=['OAG', 'WDT'],
                         help='Initial learning rate.')
     parser.add_argument('--KG_model', type=str, default='HGT',
-                        choices=['RGCN', 'HGT'],
+                        choices=['RGCN', 'HGT', 'None'],
                         help='The model for KG embedding.')
-    parser.add_argument('--SN_model', type=str, default='GAT',
-                        choices=['GCN', 'GAT', 'GAE'],
+    parser.add_argument('--SN_model', type=str, default='GCN',
+                        choices=['GCN', 'GAT', 'GAE', 'None'],
                         help='The model for SN embedding.')
     # 用cos效果好的比较明显，但是实体对齐没有啥变化
     parser.add_argument('--align_dist', type=str, default='L1',
                         help='The type of align nodes distance.',
                         choices=['L1', 'L2', 'cos'])
-    parser.add_argument('--task', type=str, default='SN_NC',
+    parser.add_argument('--task', type=str, default='Align',
                         # NC:Node Classification, LP:Link Prediction
                         choices=['KG_NC', 'KG_LP', 'SN_NC', 'SN_LP', 'Align'],
                         help='The main task.')
-    parser.add_argument('--learning_rate', type=float, default=0.01,
+    parser.add_argument('--learning_rate', type=float, default=0.001,
                         help='Initial learning rate.')
-    parser.add_argument('--epochs', type=int, default=30,
+    parser.add_argument('--epochs', type=int, default=100,
                         help='Number of epochs to train.')
     parser.add_argument('--in_dim', type=int, default=768,
                         help='Dim of input embedding vector.')
     # 隐藏层向量维度
-    parser.add_argument('--hidden_dim', type=int, default=32,
+    parser.add_argument('--hidden_dim', type=int, default=6,
                         help='Number of units in hidden layer.')
     # 输出向量维度，LP中都使用hidden_dim作为输出维度，NC中使用n_classes，很少使用这个维度
     parser.add_argument('--out_dim', type=int, default=32,
                         help='Dim of output embedding vector.')
     # 负采样的比例
-    parser.add_argument('--neg_num', type=int, default=1,
+    parser.add_argument('--neg_num', type=int, default=5,
                         help='Number of negtive sampling of each node.')
     # margin-loss的margin
-    parser.add_argument('--margin', type=int, default=1,
+    parser.add_argument('--margin', type=int, default=5,
                         help='The margin of alignment for entities.')
     # 实体对齐参数
     parser.add_argument('--align_sample', type=int, default=10,
@@ -69,15 +69,15 @@ def get_args():
     parser.add_argument('--tolerance', type=float, default=1e-3,
                         help='toleratd margainal improvement for early stopper')
     # max_round轮中没有比现在更大的，就early stop
-    parser.add_argument('--max_round', type=float, default=20,
+    parser.add_argument('--max_round', type=float, default=50,
                         help='the max round for early stopping')
     # min_epoch后才能开始early stop
-    parser.add_argument('--min_epoch', type=float, default=250,
+    parser.add_argument('--min_epoch', type=float, default=150,
                         help='the min epoch before early stopping')
     parser.add_argument("--dropout", type=float, default=0.5,
                         help="dropout probability")
     # GCN聚合的层数
-    parser.add_argument("--n_layers", type=int, default=2,
+    parser.add_argument("--n_layers", type=int, default=1,
                         help="number of propagation rounds")
     parser.add_argument("--use_self_loop", default=False, action='store_true',
                         help="include self feature as a special relation")

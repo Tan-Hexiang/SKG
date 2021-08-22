@@ -5,23 +5,40 @@ import pandas as pd
 import dill
 import numpy as np
 import torch.nn as nn
+from collections import defaultdict
 
-def align_scores(embed_KG, trans_SN, node_align_KG_valid, node_align_SN_valid,
+def align_scores(embed_KG, trans_SN, node_align_KG, node_align_SN,
                    sample_num=5, hit_pos=5, align_dist='L2'):
-    KG_valid = node_align_KG_valid.cpu().numpy()
-    SN_valid = node_align_SN_valid.cpu().numpy()
-    # 头尾实体各替换5次
+    # 修改成全连接测试，即验证集/测试集中每一个KG节点和每一个SN节点进行连接，得到排名
+    KG_node = node_align_KG.cpu().numpy()
+    # KG_node = np.sort(KG_node)
+    SN_node = node_align_SN.cpu().numpy()
+
+    sample_num = len(KG_node)
+    hit_poses = [1, 5, 10, 20, 50]
+    # 头尾实体各替换hit_pos次
     align_MRR = 0
-    align_hits = 0
-    for e1, e2 in zip(KG_valid, SN_valid):
-        # 可能会和e1, e2相同
-        e1_c = np.random.choice(KG_valid, sample_num, replace=False)
-        e2_c = np.random.choice(SN_valid, sample_num, replace=False)
-        e_KG = np.ones(sample_num, dtype=np.int) * e1
-        e_SN = np.ones(sample_num, dtype=np.int) * e2
+    align_hits = [0]*len(hit_poses)
+    idx = -1
+    for e1, e2 in zip(KG_node, SN_node):
+        idx += 1
+        # 每个KG实体和所有的SN测试集实体进行组合，计算距离并排序
+        e_KG = np.ones(len(SN_node), dtype=np.int) * e1
+        e_SN = SN_node
+        # print(e1)
+        # print(embed_KG[KG_node])
+        # print(e2)
+        # print(e_SN)
+        # print(trans_SN[SN_node])
+        # exit()
+        # e1_c = np.setdiff1d(KG_node, np.array([e1]))#np.random.choice(KG_node, sample_num, replace=False)
+        # e2_c = np.setdiff1d(SN_node, np.array([e2]))#np.random.choice(SN_node, sample_num, replace=False)
+        # e_KG = np.ones(sample_num, dtype=np.int) * e1
+        # e_SN = np.ones(sample_num, dtype=np.int) * e2
         # 最后一对是正样本
-        e_KG = np.append(np.append(e_KG, e1_c), e1)
-        e_SN = np.append(np.append(e2_c, e_SN), e2)
+        # e_KG = np.append(np.append(e_KG, e1_c), e1)
+        # e_SN = np.append(np.append(e2_c, e_SN), e2)
+
         # 计算距离和排名
         if align_dist == 'L2':
             # 向量间的距离作为分数，距离越小分数越高
@@ -30,26 +47,37 @@ def align_scores(embed_KG, trans_SN, node_align_KG_valid, node_align_SN_valid,
             result = torch.sum(metrix, dim=1)
             result_sort, indice = torch.sort(result)
             # 因为排位从0开始，所以计算时要加1
-            index = (indice == sample_num * 2).nonzero()[0][0] + 1
+            # index = (indice == sample_num * 2).nonzero()[0][0] + 1
+            index = (indice == idx).nonzero()[0][0]+1
         elif align_dist == 'L1':
             # 向量间的曼哈顿距离作为分数，距离越小分数越高
+            # print(embed_KG[e_KG])
+            # print(trans_SN[e_SN])
             metrix = embed_KG[e_KG] - trans_SN[e_SN]
             metrix = torch.abs(metrix)
+            # print(metrix)
             result = torch.sum(metrix, dim=1)
+            # print(result)
             result_sort, indice = torch.sort(result)
-            index = (indice == sample_num * 2).nonzero()[0][0] + 1
+            # print(indice)
+            # exit()
+            index = (indice == idx).nonzero()[0][0]+1
         elif align_dist == 'cos':
             # dim=1，计算行向量的相似度
             result = torch.cosine_similarity(embed_KG[e_KG],
                                              trans_SN[e_SN], dim=1)
             # 余弦相似度，值越大分数越高
             result_sort, indice = torch.sort(result, descending=True)
-            index = (indice == sample_num * 2).nonzero()[0][0] + 1
+            index = (indice == idx).nonzero()[0][0]+1
         # index = torch.float(index)
+        # e1更换，indice几乎没有变化，所以结果类似均匀分布
+        # print(indice)
         align_MRR += 1.0 / index.float()
-        align_hits += 1 if index <= hit_pos else 0
-    align_MRR /= len(KG_valid)
-    align_hits /= len(KG_valid)
+        for i in range(len(hit_poses)):
+            align_hits[i] += 1 if index <= hit_poses[i] else 0
+    # exit()
+    align_MRR /= len(KG_node)
+    align_hits = [hits / len(KG_node) * 100 for hits in align_hits]
     return align_MRR, align_hits
 
 def OAG_KG_ReadData_LP(args=None):
@@ -157,6 +185,12 @@ def OAG_KG_ReadData_LP(args=None):
     g.nodes['affiliation'].data['feature'] = affiliation_features
     g.nodes['field'].data['feature'] = field_features
     g.nodes['venue'].data['feature'] = venue_features
+
+    # 节点向量随机初始化
+    # for ntype in g.ntypes:
+    #     emb = nn.Parameter(torch.Tensor(g.number_of_nodes(ntype), args.in_dim), requires_grad=False)  # .to(device)
+    #     nn.init.xavier_uniform_(emb)
+    #     g.nodes[ntype].data['feature'] = emb
     return g, author_forward, author_backward
 
 def OAG_KG_ReadData_NC(args=None):
@@ -296,8 +330,13 @@ def OAG_SN_ReadData_LP(args=None):
         author_ids1 = []
         author_ids2 = []
         author_author_time = []
+        # 限制每条边只出现一次
+        author_author = set()
         for line in lines:
             author_id1, author_id2, time_id = map(int, line.strip('\n').split('\t'))
+            if (author_id1, author_id2) in author_author:
+                continue
+            author_author.add((author_id1, author_id2))
             if author_id1 not in author_backward:
                 author_backward[author_id1] = len(author_backward)
                 author_forward[len(author_backward) - 1] = author_id1
@@ -323,12 +362,16 @@ def OAG_SN_ReadData_LP(args=None):
     author_features = torch.tensor(author_features, dtype=torch.float32)
     g.ndata['feature'] = author_features
 
+    # 节点向量随机初始化
+    # emb = nn.Parameter(torch.Tensor(len(g.nodes()), args.in_dim), requires_grad=False)  # .to(device)
+    # nn.init.xavier_uniform_(emb)
+    # g.ndata['feature'] = emb
+
     # 设置每条边的时间戳
     g.edata['timestamp'] = torch.tensor(author_author_time, dtype=torch.float64)
     g.edata['label'] = torch.zeros(g.num_edges(), dtype=torch.int32)
     emb = nn.Parameter(torch.Tensor(g.num_edges(), 100), requires_grad=False)  # .to(device)
     nn.init.xavier_uniform_(emb)
-    # emb = emb.clone().detach()
     emb = torch.tensor(emb, dtype=torch.float32)
     g.edata['feature'] = emb
     return g, author_forward, author_backward
@@ -494,33 +537,152 @@ def WDT_KG_ReadData_LP(args):
     KG = dgl.heterograph(graph_data)
     # 随机初始化每个节点的特征向量
     for ntype in KG.ntypes:
-        emb = nn.Parameter(torch.Tensor(KG.number_of_nodes(ntype), args.dim_init), requires_grad=False)
+        emb = nn.Parameter(torch.Tensor(KG.number_of_nodes(ntype), args.in_dim), requires_grad=False)
         nn.init.xavier_uniform_(emb)
         KG.nodes[ntype].data['feature'] = emb
-
-    # 打标签
 
     return KG, id2wiki, wiki2id
 
 def WDT_KG_ReadData_NC(args):
-    pass
+    dir_path = '../dataset/WDT'
+    graph_data = {}
+    # wiki2id表示wikidata名字对应的id，id2wiki表示id对应的wikidata名字
+    # 人物名字，国籍，隶属组织，出生地
+    wiki2id, id2wiki = {}, {}
+    country2id, id2country = {}, {}
+    school2id, id2school = {}, {}
+    affiliation2id, id2affiliation = {}, {}
+    birth2id, id2birth = {}, {}
+    # 这里需要将节点的id进行转化，变成从0开始的节点
+    labels = ['actor', 'dancer', 'politician', 'programmer', 'singer']
+    # 这里面一个人可能会换国籍，因此会有多个国籍，比如英属印度和印度
+    wiki_ids_country = []
+    wiki_ids_school = []
+    wiki_ids_affiliation = []
+    wiki_ids_birth = []
+    country_ids = []
+    school_ids = []
+    affiliation_ids = []
+    birth_ids = []
+    person_label = {}
+    for label_name in labels:
+        with open(os.path.join(dir_path, label_name, 'country_of_citizenship.txt'), 'r') as fr:
+            lines = fr.readlines()
+            for line in lines:
+                wiki, country = line.strip('\n').split('\t')
+                if wiki not in wiki2id:
+                    wiki2id[wiki] = len(wiki2id)
+                    id2wiki[len(wiki2id) - 1] = wiki
+                    # 给当前人物上标签
+                    person_label[wiki2id[wiki]] = label_name
+                # else:
+                #     print(label_wiki, '\t', wiki)
+                wiki_ids_country.append(wiki2id[wiki])
+                if country not in country2id:
+                    country2id[country] = len(country2id)
+                    id2country[len(country2id) - 1] = country
+                country_ids.append(country2id[country])
+        with open(os.path.join(dir_path, label_name, 'educated_at.txt'), 'r') as fr:
+            lines = fr.readlines()
+            for line in lines:
+                wiki, school = line.strip('\n').split('\t')
+                if wiki not in wiki2id:
+                    wiki2id[wiki] = len(wiki2id)
+                    id2wiki[len(wiki2id) - 1] = wiki
+                    # 给当前人物上标签
+                    person_label[wiki2id[wiki]] = label_name
+                wiki_ids_school.append(wiki2id[wiki])
+                if school not in school2id:
+                    school2id[school] = len(school2id)
+                    id2school[len(school2id) - 1] = school
+                school_ids.append(school2id[school])
+        with open(os.path.join(dir_path, label_name, 'employer.txt'), 'r') as fr:
+            lines = fr.readlines()
+            for line in lines:
+                wiki, affiliation = line.strip('\n').split('\t')
+                if wiki not in wiki2id:
+                    wiki2id[wiki] = len(wiki2id)
+                    id2wiki[len(wiki2id) - 1] = wiki
+                    # 给当前人物上标签
+                    person_label[wiki2id[wiki]] = label_name
+                wiki_ids_affiliation.append(wiki2id[wiki])
+                if affiliation not in affiliation2id:
+                    affiliation2id[affiliation] = len(affiliation2id)
+                    id2affiliation[len(affiliation2id) - 1] = affiliation
+                affiliation_ids.append(affiliation2id[affiliation])
+        with open(os.path.join(dir_path, label_name, 'place_of_birth.txt'), 'r') as fr:
+            lines = fr.readlines()
+            for line in lines:
+                wiki, birth = line.strip('\n').split('\t')
+                if wiki not in wiki2id:
+                    wiki2id[wiki] = len(wiki2id)
+                    id2wiki[len(wiki2id) - 1] = wiki
+                    # 给当前人物上标签
+                    person_label[wiki2id[wiki]] = label_name
+                wiki_ids_birth.append(wiki2id[wiki])
+                if birth not in birth2id:
+                    birth2id[birth] = len(birth2id)
+                    id2birth[len(birth2id) - 1] = birth
+                birth_ids.append(birth2id[birth])
+    graph_data[('person', 'in', 'country')] = (torch.tensor(wiki_ids_country), torch.tensor(country_ids))
+    graph_data[('country', 'rev_in', 'person')] = (torch.tensor(country_ids), torch.tensor(wiki_ids_country))
+    graph_data[('person', 'educate', 'school')] = (torch.tensor(wiki_ids_school), torch.tensor(school_ids))
+    graph_data[('school', 'rev_educate', 'person')] = (torch.tensor(school_ids), torch.tensor(wiki_ids_school))
+    graph_data[('person', 'employ', 'affiliation')] = (
+    torch.tensor(wiki_ids_affiliation), torch.tensor(affiliation_ids))
+    # graph_data[('affiliation', 'rev_employ', 'person')] = (torch.tensor(affiliation_ids), torch.tensor(wiki_ids_affiliation))
+    graph_data[('person', 'born', 'birth')] = (torch.tensor(wiki_ids_birth), torch.tensor(birth_ids))
+    graph_data[('birth', 'rev_born', 'person')] = (torch.tensor(birth_ids), torch.tensor(wiki_ids_birth))
+
+    KG = dgl.heterograph(graph_data)
+    # 随机初始化每个节点的特征向量
+    for ntype in KG.ntypes:
+        emb = nn.Parameter(torch.Tensor(KG.number_of_nodes(ntype), args.in_dim), requires_grad=False)
+        nn.init.xavier_uniform_(emb)
+        KG.nodes[ntype].data['feature'] = emb
+
+    # 打标签
+    labels_KG = torch.zeros((KG.num_nodes('person'), len(labels)), dtype=torch.long)
+    for person_id, label_name in person_label.items():
+        labels_KG[person_id, labels.index(label_name)] = 1
+    KG.nodes['person'].data['label'] = labels_KG
+
+    # 划分训练数据
+    # 设置训练标签
+    nodes = np.array(list(id2wiki.keys()))
+    np.random.shuffle(nodes)
+    train_idx = int(len(nodes) * args.train_ratio)
+    valid_idx = int(len(nodes) * (args.train_ratio + args.valid_ratio))
+    node_align_KG_train = nodes[:train_idx]
+    node_align_KG_valid = nodes[train_idx:valid_idx]
+    node_align_KG_test = nodes[valid_idx:]
+    train_mask = torch.zeros(KG.num_nodes('person'), dtype=torch.bool)
+    valid_mask = torch.zeros(KG.num_nodes('person'), dtype=torch.bool)
+    test_mask = torch.zeros(KG.num_nodes('person'), dtype=torch.bool)
+    train_mask[node_align_KG_train] = True
+    valid_mask[node_align_KG_valid] = True
+    test_mask[node_align_KG_test] = True
+    # 测试，或应该全是，与应该全是False
+    # print(train_mask | valid_mask | test_mask)
+    # print(train_mask & valid_mask & test_mask)
+    KG.nodes['person'].data['train_mask'] = train_mask
+    KG.nodes['person'].data['valid_mask'] = valid_mask
+    KG.nodes['person'].data['test_mask'] = test_mask
+
+    return KG, id2wiki, wiki2id
 
 def WDT_SN_ReadData_LP(args):
     """
-    暂时没有采样稠密的子图，而是直接使用整张社交网络
     :param args:
     :return:
     """
     dir_path = '../dataset/WDT'
-    # wiki2id表示wikidata名字对应的id，id2wiki表示id对应的wikidata名字
-    # 人物名字，国籍，隶属组织，出生地
-    twitter2id, id2twitter = {}, {}
+
     # 这里需要将节点的id进行转化，变成从0开始的节点
     labels = ['actor', 'dancer', 'politician', 'programmer', 'singer']
-    twitter_ids1, twitter_ids2 = [], []
-    # 采样的初始节点
-    seeds = []
-    # 统计每个节点的度
+
+    # 统计每个节点的度，去除度数较低的节点
+    node_degree = defaultdict(int)
 
     for label_name in labels:
         with open(os.path.join(dir_path, label_name, 'follower_relation.txt'), 'r') as fr:
@@ -528,6 +690,30 @@ def WDT_SN_ReadData_LP(args):
             for line in lines:
                 # 文件中的关注关系是后一个人关注前一个人
                 twitter_id2, twitter_id1 = line.strip('\n').split('\t')
+                node_degree[twitter_id1] += 1
+                node_degree[twitter_id2] += 1
+
+    # 采样一个稠密子图，去掉图中度较低的节点
+    node_degree = [[key, value] for key, value in node_degree.items()]
+    node_degree  =np.array(node_degree)
+    np.random.seed(2021)
+    np.random.shuffle(node_degree)
+    # 保留4000个节点
+    sorted_node = sorted(node_degree, key=lambda x: x[1], reverse=True)[:4000]
+    sampled_nodes= [node[0] for node in sorted_node]
+
+    # wiki2id表示wikidata名字对应的id，id2wiki表示id对应的wikidata名字
+    # 人物名字，国籍，隶属组织，出生地
+    twitter2id, id2twitter = {}, {}
+    twitter_ids1, twitter_ids2 = [], []
+    for label_name in labels:
+        with open(os.path.join(dir_path, label_name, 'follower_relation.txt'), 'r') as fr:
+            lines = fr.readlines()
+            for line in lines:
+                # 文件中的关注关系是后一个人关注前一个人
+                twitter_id2, twitter_id1 = line.strip('\n').split('\t')
+                if twitter_id1 not in sampled_nodes or twitter_id2 not in sampled_nodes:
+                    continue
                 if twitter_id1 not in twitter2id:
                     twitter2id[twitter_id1] = len(twitter2id)
                     id2twitter[len(twitter2id) - 1] = twitter_id1
@@ -536,22 +722,104 @@ def WDT_SN_ReadData_LP(args):
                     twitter2id[twitter_id2] = len(twitter2id)
                     id2twitter[len(twitter2id) - 1] = twitter_id2
                 twitter_ids2.append(twitter2id[twitter_id2])
-        # with open(os.path.join(dir_path, label_name, 'twittername.txt'), 'r') as fr:
-        #     lines = fr.readlines()
-        #     for line in lines
+
     SN = dgl.graph((torch.tensor(twitter_ids1), torch.tensor(twitter_ids2)))
-
-    # 采样一个稠密子图
-
     # 生成每个节点的特征向量
-    emb = nn.Parameter(torch.Tensor(len(SN.nodes()), args.dim_init), requires_grad=False)
+    emb = nn.Parameter(torch.Tensor(len(SN.nodes()), args.in_dim), requires_grad=False)
     nn.init.xavier_uniform_(emb)
     SN.ndata['feature'] = emb
 
     return SN, id2twitter, twitter2id
 
 def WDT_SN_ReadData_NC(args):
-    pass
+    dir_path = '../dataset/WDT'
+
+    # 这里需要将节点的id进行转化，变成从0开始的节点
+    labels = ['actor', 'dancer', 'politician', 'programmer', 'singer']
+
+    # 统计每个节点的度，去除度数较低的节点
+    node_degree = defaultdict(int)
+
+    for label_name in labels:
+        with open(os.path.join(dir_path, label_name, 'follower_relation.txt'), 'r') as fr:
+            lines = fr.readlines()
+            for line in lines:
+                # 文件中的关注关系是后一个人关注前一个人
+                twitter_id2, twitter_id1 = line.strip('\n').split('\t')
+                node_degree[twitter_id1] += 1
+                node_degree[twitter_id2] += 1
+
+    # 采样一个稠密子图，去掉图中度较低的节点
+    node_degree = [[key, value] for key, value in node_degree.items()]
+    node_degree = np.array(node_degree)
+    np.random.shuffle(node_degree)
+    # 保留8000个节点
+    sorted_node = sorted(node_degree, key=lambda x: x[1], reverse=True)[:4000]
+    sampled_nodes = [node[0] for node in sorted_node]
+
+    # wiki2id表示wikidata名字对应的id，id2wiki表示id对应的wikidata名字
+    # 人物名字，国籍，隶属组织，出生地
+    twitter2id, id2twitter = {}, {}
+    twitter_ids1, twitter_ids2 = [], []
+    for label_name in labels:
+        with open(os.path.join(dir_path, label_name, 'follower_relation.txt'), 'r') as fr:
+            lines = fr.readlines()
+            for line in lines:
+                # 文件中的关注关系是后一个人关注前一个人
+                twitter_id2, twitter_id1 = line.strip('\n').split('\t')
+                if twitter_id1 not in sampled_nodes or twitter_id2 not in sampled_nodes:
+                    continue
+                if twitter_id1 not in twitter2id:
+                    twitter2id[twitter_id1] = len(twitter2id)
+                    id2twitter[len(twitter2id) - 1] = twitter_id1
+                twitter_ids1.append(twitter2id[twitter_id1])
+                if twitter_id2 not in twitter2id:
+                    twitter2id[twitter_id2] = len(twitter2id)
+                    id2twitter[len(twitter2id) - 1] = twitter_id2
+                twitter_ids2.append(twitter2id[twitter_id2])
+
+    SN = dgl.graph((torch.tensor(twitter_ids1), torch.tensor(twitter_ids2)))
+    # 生成每个节点的特征向量
+    emb = nn.Parameter(torch.Tensor(len(SN.nodes()), args.in_dim), requires_grad=False)
+    nn.init.xavier_uniform_(emb)
+    SN.ndata['feature'] = emb
+
+    # 打标签
+    nodes_SN = []
+    labels_SN = torch.zeros((SN.num_nodes(), len(labels)), dtype=torch.long)
+    for label_name in labels:
+        with open(os.path.join(dir_path, label_name, 'twitter_and_wiki.txt'), 'r') as fr:
+            lines = fr.readlines()
+            for line in lines:
+                wiki, twitter = line.strip('\n').split('\t')
+                if twitter in twitter2id:
+                    labels_SN[twitter2id[twitter], labels.index(label_name)] = 1
+                    nodes_SN.append(twitter2id[twitter])
+    SN.ndata['label'] = labels_SN
+
+    # 划分数据集
+    # print(nodes_SN)
+    np.random.shuffle(nodes_SN)
+    train_idx = int(len(nodes_SN) * args.train_ratio)
+    valid_idx = int(len(nodes_SN) * (args.train_ratio + args.valid_ratio))
+    node_SN_train = nodes_SN[:train_idx]
+    node_SN_valid = nodes_SN[train_idx:valid_idx]
+    node_SN_test = nodes_SN[valid_idx:]
+    train_mask = torch.zeros(SN.num_nodes(), dtype=torch.bool)
+    valid_mask = torch.zeros(SN.num_nodes(), dtype=torch.bool)
+    test_mask = torch.zeros(SN.num_nodes(), dtype=torch.bool)
+    train_mask[node_SN_train] = True
+    valid_mask[node_SN_valid] = True
+    test_mask[node_SN_test] = True
+
+    # print(train_mask | valid_mask | test_mask) # 有True有False，这里的True就是有label的节点，False是没有label的节点
+    # print((train_mask | valid_mask | test_mask).sum()) # 应该是对齐节点的数量
+    # print(train_mask & valid_mask & test_mask) # 全是False
+    SN.ndata['train_mask'] = train_mask
+    SN.ndata['valid_mask'] = valid_mask
+    SN.ndata['test_mask'] = test_mask
+
+    return SN, id2twitter, twitter2id
 
 def node_align_split(args, KG_forward, KG_backward, SN_forward, SN_backward, device):
     """
@@ -633,6 +901,7 @@ def node_align_split(args, KG_forward, KG_backward, SN_forward, SN_backward, dev
                         if wiki in KG_backward and twitter in SN_backward and KG_backward[wiki] not in wiki2twitter:
                             wiki2twitter[KG_backward[wiki]] = SN_backward[twitter]
                             nodes.append(KG_backward[wiki])
+            nodes = np.array(nodes)
             node_align_KG_train = nodes
             node_align_SN_train = [wiki2twitter[node] for node in node_align_KG_train]
         elif args.dataset == 'OAG':
@@ -717,15 +986,19 @@ if __name__ == '__main__':
 
     import argparse
     parser = argparse.ArgumentParser(description='SKG')
-    parser.add_argument('--dim_init', type=int, default=768, help='Dim of initial embedding vector.')
+    parser.add_argument('--in_dim', type=int, default=256, help='Dim of initial embedding vector.')
     parser.add_argument('--cuda', type=int, default=0, help='GPU id to use.')
     parser.add_argument('--train_ratio', type=float, default=0.7, help='Train set ratio.')
     parser.add_argument('--valid_ratio', type=float, default=0.1, help='Valid set ratio.')
     args = parser.parse_args()
     # 测试WDT数据集读取
-    # KG, KG_forward, KG_backward = WDT_KG_ReadData(args)
-    # print(KG)
-    # SN, SN_forward, SN_backward = WDT_SN_ReadData(args)
+    KG, KG_forward, KG_backward = WDT_KG_ReadData_NC(args)
+    print(KG)
+    SN, SN_forward, SN_backward = WDT_SN_ReadData_NC(args)
+    print(SN)
+    # SN, _, _ = OAG_SN_ReadData_LP(args)
+    # print(SN)
+    # SN, SN_forward, SN_backward = WDT_SN_ReadData_LP(args)
     # print(SN)
     # # 处理对齐问题
     # node_align(args, KG_backward, SN_backward)
@@ -734,4 +1007,4 @@ if __name__ == '__main__':
     # OAG_KG_ReadData_NC(args)
 
     # 测试SN节点分类数据
-    OAG_SN_ReadData_NC(args)
+    # OAG_SN_ReadData_NC(args)

@@ -1,7 +1,7 @@
 # SN_NC时，KG中应该把一类边去掉，这里没有这么处理，所以会发生信息泄露，不过链接预测不是主任务，所以影响不大
 from parser import *
 import sys
-sys.path.extend(['../RGCN', '../HGT', '../GCN', '../GAT', '../GAE', '../GMI'])
+sys.path.extend(['../RGCN', '../HGT-DGL', '../GCN', '../GAT', '../GAE', '../GMI'])
 
 # 导入主实验模块
 import data_process_MAIN
@@ -26,12 +26,25 @@ filterwarnings("ignore")
 
 args, sys_argv = get_args()
 print(args)
+assert (args.dataset in ['OAG', 'WDT'])
+assert (args.KG_model in ['RGCN', 'HGT', 'None'])
+assert (args.KG_model in ['RGCN', 'HGT', 'None'])
+assert (args.SN_model in ['GCN', 'GAT', 'GAE', 'None'])
+assert (args.task in ['KG_NC', 'KG_LP', 'SN_NC', 'SN_LP', 'Align'])
+assert (args.KG_model != 'None' or args.SN_model != 'None')
+if args.KG_model == 'None' and 'KG' in args.task:
+    assert True
+if args.SN_model == 'None' and 'SN' in args.task:
+    assert True
+
 if args.cuda != -1:
     device = torch.device("cuda:" + str(args.cuda))
 else:
     device = torch.device("cpu")
 
 def KG_data_prepare():
+    # if args.KG_model == 'None':
+    #     return tuple([None]*9)
     # KG数据读取
     if args.dataset == 'OAG':
         if args.task in ['KG_NC', 'SN_NC']:
@@ -50,20 +63,17 @@ def KG_data_prepare():
             KG, KG_forward, KG_backward = data_process_MAIN.WDT_KG_ReadData_LP(args)
         category = 'person'
         triplet = ('person', 'employ', 'affiliation')
-    else:
-        assert (args.dataset in ['OAG', 'WDT'])
-
-    KG.node_dict = {}
-    KG.edge_dict = {}
-    # 给每个类型加上id，从0开始
-    for ntype in KG.ntypes:
-        KG.node_dict[ntype] = len(KG.node_dict)
-    for etype in KG.etypes:
-        KG.edge_dict[etype] = len(KG.edge_dict)
-        # 貌似dgl的图在to(device)后就不能进行更改了
-        KG.edges[etype].data['id'] = torch.ones(KG.number_of_edges(etype), dtype=torch.long) * KG.edge_dict[etype]
 
     if args.task == 'KG_NC':
+        KG.node_dict = {}
+        KG.edge_dict = {}
+        # 给每个类型加上id，从0开始
+        for ntype in KG.ntypes:
+            KG.node_dict[ntype] = len(KG.node_dict)
+        for etype in KG.etypes:
+            KG.edge_dict[etype] = len(KG.edge_dict)
+            # 貌似dgl的图在to(device)后就不能进行更改了
+            KG.edges[etype].data['id'] = torch.ones(KG.number_of_edges(etype), dtype=torch.long) * KG.edge_dict[etype]
         # 需要分类的节点类型
         train_mask = KG.nodes[category].data.pop('train_mask')
         valid_mask = KG.nodes[category].data.pop('valid_mask')
@@ -89,7 +99,7 @@ def KG_data_prepare():
                                        num_hidden_layers=args.n_layers - 2,
                                        dropout=args.dropout,
                                        use_self_loop=args.use_self_loop)
-        elif args.KG_model == 'HGT':
+        else:#if args.KG_model == 'HGT':
             model_KG = model_HGT.HGT_NC(KG,
                                         in_dim=args.in_dim,
                                         hidden_dim=args.hidden_dim,
@@ -97,8 +107,8 @@ def KG_data_prepare():
                                         n_layers=2,
                                         n_heads=4,
                                         use_norm=True)
-        else:
-            assert (args.KG_model in ['RGCN', 'HGT'])
+        # elif args.KG_model == 'None':
+        #     return tuple([None]*9)
         model_KG = model_KG.to(device)
         print(KG)
         return KG, model_KG, category, labels, train_idx, valid_idx, test_idx, KG_forward, KG_backward
@@ -107,24 +117,45 @@ def KG_data_prepare():
             # KG_LP时，KG需要采样，其余时候不需要
             # 这里的邻接矩阵作用只是提供idx的范围，行数是源节点，列数是目标节点
             adj_orig = KG.adjacency_matrix(etype=triplet[1]).to_dense()
-            train_edge_idx, val_edges, val_edges_false, test_edges, test_edges_false = data_process_KG.mask_test_edges_LP(
-                KG, adj_orig, triplet[1], args.train_ratio, args.valid_ratio)
+            train_edge_idx, val_edges, val_edges_false, test_edges, test_edges_false = \
+                data_process_KG.mask_test_edges_LP(KG, adj_orig, triplet[1], args.train_ratio, args.valid_ratio)
             train_edge_idx = torch.tensor(train_edge_idx)
 
-            # 老版本preserve_nodes=True会报错
-            train_graph = KG.edge_subgraph({
-                # 把author/paper这类和各种节点都有连边的点放在源节点的位置，猜测是multi_update_all函数只更新尾实体，所以如果尾实体是单独的节点类型，
-                # 会没有添加't'属性
-                ('author', 'study', 'field'): train_edge_idx,
-                ('author', 'in', 'affiliation'): list(range(KG.number_of_edges('in'))),
-                ('affiliation', 'has', 'author'): list(range(KG.number_of_edges('has'))),
-                ('author', 'contribute', 'venue'): list(range(KG.number_of_edges('contribute'))),
-                ('venue', 'be-contributed', 'author'): list(range(KG.number_of_edges('be-contributed'))),
-            }, preserve_nodes=True)
+            if args.dataset == 'OAG':
+                train_graph = KG.edge_subgraph({
+                    # 把author/paper这类和各种节点都有连边的点放在源节点的位置，猜测是multi_update_all函数只更新尾实体，所以如果尾实体是单独的节点类型，
+                    # 会没有添加't'属性
+                    ('author', 'study', 'field'): train_edge_idx,
+                    ('author', 'in', 'affiliation'): list(range(KG.number_of_edges('in'))),
+                    ('affiliation', 'has', 'author'): list(range(KG.number_of_edges('has'))),
+                    ('author', 'contribute', 'venue'): list(range(KG.number_of_edges('contribute'))),
+                    ('venue', 'be-contributed', 'author'): list(range(KG.number_of_edges('be-contributed'))),
+                }, preserve_nodes=True)
+            elif args.dataset == 'WDT':
+                train_graph = KG.edge_subgraph({
+                    # 把author/paper这类和各种节点都有连边的点放在源节点的位置，猜测是multi_update_all函数只更新尾实体，所以如果尾实体是单独的节点类型，
+                    # 会没有添加't'属性
+                    ('person', 'employ', 'affiliation'): train_edge_idx,
+                    ('person', 'in', 'country'): list(range(KG.number_of_edges('in'))),
+                    ('country', 'rev_in', 'person'): list(range(KG.number_of_edges('rev_in'))),
+                    ('person', 'educate', 'school'): list(range(KG.number_of_edges('educate'))),
+                    ('school', 'rev_educate', 'person'): list(range(KG.number_of_edges('rev_educate'))),
+                    ('person', 'born', 'birth'): list(range(KG.number_of_edges('born'))),
+                    ('birth', 'rev_born', 'person'): list(range(KG.number_of_edges('rev_born')))
+                }, preserve_nodes=True)
             KG = train_graph
         else:
             val_edges, val_edges_false, test_edges, test_edges_false = None, None, None, None
 
+        KG.node_dict = {}
+        KG.edge_dict = {}
+        # 给每个类型加上id，从0开始
+        for ntype in KG.ntypes:
+            KG.node_dict[ntype] = len(KG.node_dict)
+        for etype in KG.etypes:
+            KG.edge_dict[etype] = len(KG.edge_dict)
+            # 貌似dgl的图在to(device)后就不能进行更改了
+            KG.edges[etype].data['id'] = torch.ones(KG.number_of_edges(etype), dtype=torch.long) * KG.edge_dict[etype]
         KG = KG.to(device)
         if args.KG_model == 'RGCN':
             model_KG = model_RGCN.RGCN_LP(KG,
@@ -134,21 +165,22 @@ def KG_data_prepare():
                                           num_hidden_layers=args.n_layers,
                                           dropout=args.dropout,
                                           use_self_loop=args.use_self_loop)
-        elif args.KG_model == 'HGT':
+        else:#elif args.KG_model == 'HGT':
             model_KG = model_HGT.HGT_LP(KG,
                                         in_dim=args.in_dim,
                                         hidden_dim=args.hidden_dim,
                                         out_dim=args.hidden_dim,
-                                        n_layers=2,
-                                        n_heads=4,
+                                        n_layers=args.n_layers,
+                                        n_heads=1,
                                         use_norm=True)
-        else:
-            assert (args.KG_model in ['RGCN', 'HGT'])
+
         model_KG = model_KG.to(device)
         print(KG)
         return KG, model_KG, triplet, val_edges, val_edges_false, test_edges, test_edges_false, KG_forward, KG_backward
 
 def SN_data_prepare():
+    # if args.SN_model == 'None':
+    #     return tuple([None]*9)
     # SN数据读取
     if args.dataset == 'OAG':
         if args.task == 'SN_NC':
@@ -160,9 +192,10 @@ def SN_data_prepare():
             SN, SN_forward, SN_backward = data_process_MAIN.WDT_SN_ReadData_NC(args)
         else:
             SN, SN_forward, SN_backward = data_process_MAIN.WDT_SN_ReadData_LP(args)
-    else:
-        assert (args.dataset in ['OAG', 'WDT'])
 
+    SN = dgl.remove_self_loop(SN)
+    SN = dgl.add_self_loop(SN)
+    print(SN_forward)
     if args.task == 'SN_NC':
         features = SN.ndata['feature'].to(device)
         labels = SN.ndata['label'].to(device)
@@ -171,8 +204,6 @@ def SN_data_prepare():
         test_idx_SN = SN.ndata['test_mask']
         in_dim = features.shape[1]
         n_classes = labels.shape[1]
-        SN = dgl.remove_self_loop(SN)
-        SN = dgl.add_self_loop(SN)
 
         SN = SN.to(device)
         if args.SN_model == 'GCN':
@@ -181,7 +212,7 @@ def SN_data_prepare():
                                         hidden_dim=args.hidden_dim,
                                         out_dim=n_classes,
                                         n_layers=args.n_layers,
-                                        activation=F.relu,
+                                        activation=F.elu,
                                         dropout=args.dropout)
         elif args.SN_model == 'GAT':
             heads = [args.num_heads] * (args.n_layers - 1) + [args.num_out_heads]
@@ -203,8 +234,7 @@ def SN_data_prepare():
                                         hidden_dim=args.hidden_dim,
                                         out_dim=n_classes,
                                         device=device)
-        else:
-            assert (args.SN_model in ['GCN', 'GAT', 'GAE'])
+
         model_SN = model_SN.to(device)
 
         print(SN)
@@ -235,7 +265,7 @@ def SN_data_prepare():
                                         in_dim=in_dim,
                                         hidden_dim=args.hidden_dim,
                                         n_layers=args.n_layers,
-                                        activation=F.relu,
+                                        activation=F.elu,
                                         dropout=args.dropout)
         elif args.SN_model == 'GAT':
             heads = [args.num_heads] * (args.n_layers - 1) + [args.num_out_heads]
@@ -255,8 +285,6 @@ def SN_data_prepare():
                                         hidden_dim=args.hidden_dim,
                                         out_dim=args.out_dim,
                                         device=device)
-        else:
-            assert (args.SN_model in ['GCN', 'GAT', 'GAE'])
         model_SN = model_SN.to(device)
         print(SN)
         return SN, model_SN, feature_SN, val_edges, val_edges_false, \
@@ -269,9 +297,13 @@ if __name__ == '__main__':
         SN, model_SN, feature_SN, val_edges_SN, val_edges_false_SN, \
         test_edges_SN, test_edges_false_SN, SN_forward, SN_backward = SN_data_prepare()
 
-        crition_KG = torch.nn.BCEWithLogitsLoss()
-        adj_SN = SN.adjacency_matrix().to_dense().to(device)
+        if args.dataset == 'OAG':
+            # 多标签分类
+            crition_KG = torch.nn.BCEWithLogitsLoss()
+        elif args.dataset == 'WDT':
+            crition_KG = torch.nn.CrossEntropyLoss()
 
+        adj_SN = SN.adjacency_matrix().to_dense().to(device)
         weight_tensor_SN, norm_SN = data_process_SN.compute_loss_para_LP(adj_SN, device)
         model = Model_KG_NC(model_KG, model_SN, args.in_dim, args.hidden_dim).to(device)
     elif args.task in ['KG_LP', 'SN_LP', 'Align']:
@@ -289,10 +321,12 @@ if __name__ == '__main__':
         SN, model_SN, labels_SN, feature_SN, train_idx_SN, valid_idx_SN, \
         test_idx_SN, SN_forward, SN_backward = SN_data_prepare()
 
-        crition_SN = torch.nn.BCEWithLogitsLoss()
+        if args.dataset == 'OAG':
+            crition_SN = torch.nn.BCEWithLogitsLoss()
+        elif args.dataset == 'WDT':
+            crition_SN = torch.nn.CrossEntropyLoss()
         model = Model_SN_NC(model_KG, model_SN, args.in_dim, args.hidden_dim).to(device)
-    else:
-        assert (args.task in ['KG_NC', 'KG_LP', 'SN_NC', 'SN_LP', 'Align'])
+
 
     # 生成实体对齐的训练集
     node_align_KG_train, node_align_KG_valid, node_align_KG_test, \
@@ -302,10 +336,17 @@ if __name__ == '__main__':
     node_align_SN_train = node_align_SN_train.repeat(args.neg_num)
 
     # 优化器可以进行选择
-    optimizer = torch.optim.AdamW(model.parameters())
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
+    # optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+    # optimizer = torch.optim.SGD(model.parameters(), lr=args.learning_rate, momentum=0.9)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, total_steps=args.epochs, max_lr=1e-3, pct_start=0.05)
+    # scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda epoch: 1 / (epoch + 1))
+    # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
+    # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.7)
+
     early_stopper = data_process_MAIN.EarlyStopMonitor(max_round=args.max_round, min_epoch=args.min_epoch,
                                                        tolerance=args.tolerance)
+    print(SN_forward)
 
     for epoch in range(args.epochs):
         t = time.time()
@@ -315,7 +356,11 @@ if __name__ == '__main__':
         if args.task == 'KG_NC':
             logits_KG, res_mi_KG, res_local_KG, logits_SN, embed_SN, trans_SN, res_mi_SN, res_local_SN = \
                 model(category_KG, SN, feature_SN, adj_SN, args.neg_num, device)
-            loss_KG = crition_KG(logits_KG[train_idx_KG], labels_KG[train_idx_KG])
+            # 多分类的损失函数要求label类型是torch.long，且维度是num*1，维度1的表示第几类
+            if args.dataset == 'OAG':
+                loss_KG = crition_KG(logits_KG[train_idx_KG], labels_KG[train_idx_KG])
+            elif args.dataset == 'WDT':
+                loss_KG = crition_KG(logits_KG[train_idx_KG], labels_KG[train_idx_KG].argmax(dim=1))
             # 这里返回的logits已经经过sigmoid，GAE使用整张图作为训练样本
             loss_SN = norm_SN * F.binary_cross_entropy(logits_SN.view(-1), adj_SN.view(-1), weight=weight_tensor_SN)
         elif args.task in ['KG_LP', 'SN_LP', 'Align']:
@@ -332,9 +377,13 @@ if __name__ == '__main__':
             logits_SN, embed_SN, trans_SN, res_mi_SN, res_local_SN = \
                 model(KG, negative_graph_KG, triplet, SN, feature_SN, args.neg_num, device)
             loss_KG = data_process_KG.compute_loss_LP(pos_score_KG, neg_score_KG)
-            loss_SN = crition_SN(logits_SN[train_idx_SN], labels_SN[train_idx_SN])
-        else:
-            assert (args.task in ['KG_NC', 'KG_LP', 'SN_NC', 'SN_LP', 'Align'])
+            if args.dataset == 'OAG':
+                loss_SN = crition_SN(logits_SN[train_idx_SN], labels_SN[train_idx_SN])
+            elif args.dataset == 'WDT':
+                loss_SN = crition_SN(logits_SN[train_idx_SN], labels_SN[train_idx_SN].argmax(dim=1))
+
+
+
 
         # 计算互信息损失
         res_mi_KG_pos, res_mi_KG_neg = res_mi_KG
@@ -349,12 +398,20 @@ if __name__ == '__main__':
         # 实体对齐损失函数
         # 损失函数增加负采样，这里的负样本从社交网络中选取，因为社交网络的作者节点多
         loss_align = 0
-        node_align_KG_neg = node_align_KG_train
-        node_align_SN_neg = torch.randint(0, SN.num_nodes(), (len(node_align_SN_train),)).to(device)
         if args.dataset == 'OAG':
             align_target = 'author'
         else:
             align_target = 'person'
+
+        # print(embed_SN[node_align_SN_valid])
+        # print(trans_SN[node_align_SN_valid])
+        # print(KG.nodes[align_target].data['h'][node_align_KG_valid])
+        # 每十轮生成负样本
+        # if epoch % 10 == 0:
+            # node_align_KG_neg = node_align_KG_train
+        node_align_KG_neg = torch.randint(0, KG.num_nodes(align_target), (len(node_align_KG_train),)).to(device)
+            # node_align_SN_neg = torch.randint(0, SN.num_nodes(), (len(node_align_SN_train),)).to(device)
+        node_align_SN_neg = torch.randint(0, SN.num_nodes(), (len(node_align_SN_train),)).to(device)
         if args.align_dist == 'L2':
             # 向量间的距离作为损失函数
             metrix_pos = KG.nodes[align_target].data['h'][node_align_KG_train] - trans_SN[node_align_SN_train]
@@ -366,12 +423,18 @@ if __name__ == '__main__':
                 loss_align += max(0, result)
         elif args.align_dist == 'L1':
             metrix_pos = KG.nodes[align_target].data['h'][node_align_KG_train] - trans_SN[node_align_SN_train]
-            metrix_neg = KG.nodes[align_target].data['h'][node_align_KG_neg] - trans_SN[node_align_SN_neg]
+            metrix_neg1 = KG.nodes[align_target].data['h'][node_align_KG_train] - trans_SN[node_align_SN_neg]
+            metrix_neg2 = KG.nodes[align_target].data['h'][node_align_KG_neg] - trans_SN[node_align_SN_train]
             res_pos = torch.sum(torch.abs(metrix_pos), dim=1)
-            res_neg = torch.sum(torch.abs(metrix_neg), dim=1)
-            results = args.margin + res_pos - res_neg
-            for result in results:
+            res_neg1 = torch.sum(torch.abs(metrix_neg1), dim=1)
+            res_neg2 = torch.sum(torch.abs(metrix_neg2), dim=1)
+            results1 = args.margin + res_pos - res_neg1
+            results2 = args.margin + res_pos - res_neg2
+            for result in results1:
                 loss_align += max(0, result)
+            for result in results2:
+                loss_align += max(0, result)
+
         elif args.align_dist == 'cos':
             # dim=1，计算行向量的相似度
             res_pos = torch.cosine_similarity(KG.nodes[align_target].data['h'][node_align_KG_train], trans_SN[node_align_SN_train], dim=1)
@@ -382,9 +445,17 @@ if __name__ == '__main__':
                 loss_align += max(0, result)
         loss_align /= len(node_align_KG_train)
 
-        loss = args.w_KG*loss_KG + args.w_SN*loss_SN + \
-               args.w_KG_MI*loss_KG_MI + args.w_SN_MI*loss_SN_MI + \
-               args.w_align*loss_align
+        if args.KG_model == 'None':
+            loss = loss_SN
+        elif args.SN_model == 'None':
+            loss = loss_KG
+        elif args.task == 'Align':
+            # loss = loss_align
+            loss = 2*loss_align + loss_KG+loss_SN+loss_KG_MI+loss_SN_MI
+        else:
+            loss = args.w_KG*loss_KG + args.w_SN*loss_SN + \
+                   args.w_KG_MI*loss_KG_MI + args.w_SN_MI*loss_SN_MI + \
+                   args.w_align*loss_align
 
         optimizer.zero_grad()
         loss.backward()
@@ -399,8 +470,8 @@ if __name__ == '__main__':
                       "val_micro_f1_KG=", "{:.5f}".format(val_micro_f1_KG),
                       "val_macro_f1_KG=", "{:.5f}".format(val_macro_f1_KG),
                       )
-                if early_stopper.early_stop_check(val_micro_f1_KG, model):
-                    print('Use micro_f1_KG as early stopping target')
+                if early_stopper.early_stop_check(val_macro_f1_KG, model):
+                    print('Use macro_f1_KG as early stopping target')
                     print('No improvment over {} epochs, stop training'.format(early_stopper.max_round))
                     print(f'Loading the best model at epoch {early_stopper.best_epoch}')
                     model = early_stopper.model
@@ -444,6 +515,10 @@ if __name__ == '__main__':
                     model = early_stopper.model
                     break
             elif args.task == 'Align':
+                # print(KG.nodes[align_target].data['h'][node_align_KG_valid[0]])
+                # print(KG.nodes[align_target].data['h'][node_align_KG_valid[1]])
+                # print('\n\n')
+                # print(trans_SN[0])
                 # 实体对齐的指标MRR，hits@10
                 # 知识图谱的节点向量KG.nodes[align_target].data['h'][node_align_KG_train]
                 # 社交网络的节点向量trans_SN[node_align_SN_train]
@@ -457,11 +532,12 @@ if __name__ == '__main__':
                     align_dist=args.align_dist)
                 print("Epoch:", '%04d' % (epoch + 1), "train_loss=", "{:.5f}".format(loss.item()),
                       'val_MRR_align=', '{:.5f}'.format(val_MRR_align),
-                      "val_hits@{}_align=".format(args.hits_num), '{:.5f}'.format(val_hits_align)
+                      "val_hits@{}_align=".format(args.hits_num), val_hits_align
                       )
                 # early stopping
-                if early_stopper.early_stop_check(val_hits_align, model):
-                    print('Use hits@{} as early stopping target'.format(args.hits_num))
+                if early_stopper.early_stop_check(val_MRR_align.cpu(), model):
+                    # print('Use hits@{} as early stopping target'.format(args.hits_num))
+                    print('Use MRR as early stopping target')
                     print('No improvment over {} epochs, stop training'.format(early_stopper.max_round))
                     print(f'Loading the best model at epoch {early_stopper.best_epoch}')
                     model = early_stopper.model
@@ -492,11 +568,11 @@ if __name__ == '__main__':
     elif args.task == 'Align':
         test_MRR_align, test_hits_align = data_process_MAIN.align_scores(KG.nodes[align_target].data['h'],
                                                                           trans_SN,
-                                                                          node_align_KG_valid,
-                                                                          node_align_SN_valid,
+                                                                          node_align_KG_test,
+                                                                          node_align_SN_test,
                                                                           sample_num=args.align_sample,
                                                                           hit_pos=args.hits_num,
                                                                           align_dist=args.align_dist)
         print('test_MRR_align=', '{:.5f}'.format(test_MRR_align),
-              "test_hits@{}_align=".format(args.hits_num), '{:.5f}'.format(test_hits_align))
+              "test_hits@{}_align=".format(args.hits_num), test_hits_align)
     print(args)
