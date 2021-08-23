@@ -20,15 +20,15 @@ import io
 import sys
 import time
 import random
-logf=open("../dataset/WDT/Limit200/mainlog.txt","w")
+logf=open("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\mainlog.txt","w")
 def get_twitter_user_name(page_url: str) -> str:
-    """提取Twitter的账号用户名称
-    主要用于从Twitter任意账号页的Url中提取账号用户名称
-    :param page_url: Twitter任意账号页的Url
-    :return: Twitter账号用户名称
-    """
-    if pattern := re.search(r"(?<=twitter.com/)[^/]+", page_url):
-        return pattern.group()
+        """提取Twitter的账号用户名称
+        主要用于从Twitter任意账号页的Url中提取账号用户名称
+        :param page_url: Twitter任意账号页的Url
+        :return: Twitter账号用户名称
+        """
+        if pattern := re.search(r"(?<=twitter.com/)[^/]+", page_url):
+            return pattern.group()
 
 """_main_"""
 def get_wikidata(type,username_path,relation_path):
@@ -94,7 +94,7 @@ def get_KG(type,pre,filename,typefilepath):
     sparql.setReturnFormat(JSON)
     qres = sparql.query().convert() 
 
-    f=open("../dataset/WDT/Limit200/"+typefilepath+"/"+filename,"a+",encoding='utf-8')
+    f=open("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\"+typefilepath+"\\"+filename,"a+",encoding='utf-8')
     for result in qres['results']['bindings']:
         
         wikidata_items=result['item']['value'].strip('\n')
@@ -135,22 +135,22 @@ typelist["wd:Q1163715"]="美国棒球联赛"
 
 #获取对应类型的社交网络
 start_node_list=[]
-f=open("../dataset/WDT/Limit200/NBA/twittername.txt","r",encoding='utf-8')
+f=open("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NBA\\twittername.txt","r",encoding='utf-8')
 for name in f.readlines():
     name=name.strip("\n")
     start_node_list.append(name)
 f.close()
-f=open("../dataset/WDT/Limit200/NFL/twittername.txt","r",encoding='utf-8')
+f=open("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NFL\\twittername.txt","r",encoding='utf-8')
 for name in f.readlines():
     name=name.strip("\n")
     start_node_list.append(name)
 f.close()
-f=open("../dataset/WDT/Limit200/英超/twittername.txt","r",encoding='utf-8')
+f=open("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\英超\\twittername.txt","r",encoding='utf-8')
 for name in f.readlines():
     name=name.strip("\n")
     start_node_list.append(name)
 f.close()
-f=open("../dataset/WDT/Limit200/美国棒球联赛/twittername.txt","r",encoding='utf-8')
+f=open("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\美国棒球联赛\\twittername.txt","r",encoding='utf-8')
 for name in f.readlines():
     name=name.strip("\n")
     start_node_list.append(name)
@@ -158,15 +158,7 @@ f.close()
 
 
 
-# print("\a")
-# twitter_spiter.spidermain(start_node_list,"L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NBA\\twittername.txt","L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NBA\\")
-# print("NBA完成",file=logf)
-# # twitter_spiter.spidermain(start_node_list,"L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NFL\\twittername.txt","L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NFL\\")
-# # print("NFL完成",file=logf)
-# twitter_spiter.spidermain(start_node_list,"L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\英超\\twittername.txt","L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\英超\\")
-# print("英超完成",file=logf)
-twitter_spiter.spidermain(start_node_list,"../dataset/WDT/Limit200/美国棒球联赛/twittername.txt","../dataset/WDT/Limit200/美国棒球联赛/")
-print("美国棒球联赛完成",file=logf)
+#启动入口
+twitter_spiter.spidermain(start_node_list)
 
 
-# twitter_spiter.filter_followers("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NBA\\",start_node_list)

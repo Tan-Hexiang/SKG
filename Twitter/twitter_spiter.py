@@ -18,11 +18,11 @@ import random
 import winsound
 maxfollowers_num=500
 maxfollowing_num=400
-min_interaction=6
-max_interaction=20
-maxfollowing=1000#get_following专用
-logfile=open("../dataset/WDT/Limit200/log.txt","w")
-logfilter=open("../dataset/WDT/Limit200/logfilter.txt","w")
+min_interaction=5#最低5个
+max_interaction=15#15个直接终止
+maxfollowing=500#get_following专用，最多浏览这么多就终止
+logfile=open("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\log.txt","w")
+logfilter=open("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\logfilter.txt","w")
 duration = 1000  # millisecond
 freq = 440  # Hz
 
@@ -47,6 +47,7 @@ class SpiderTwitterAccountInfo(tool.abc.SingleSpider):
             f.write(line[1]) 
             f.write("\n")
     def writepair(self,path:str, pair):
+        print("写入文件"+path+str(pair))
         f=open(path,'a+')
         f.write(pair[0])
         f.write("\t")
@@ -151,7 +152,7 @@ class SpiderTwitterAccountInfo(tool.abc.SingleSpider):
                         num=num+1
                         print("当前following 初始node 数量："+str(len(following_name)))
                         #交集大于阈值，退出，save设为true
-                        if num > min_interaction:
+                        if num >= min_interaction:
                             save=True
                             # 交集大于最大关系数，直接退出
                             if num >max_interaction:
@@ -164,7 +165,7 @@ class SpiderTwitterAccountInfo(tool.abc.SingleSpider):
                         break
                         
             except Exception as e:
-                print(e)
+                print(e,file=logfilter)
                 # print("--get following of ",user_name)
 
             if exitflag==True:
@@ -174,37 +175,37 @@ class SpiderTwitterAccountInfo(tool.abc.SingleSpider):
         return following_name,save,num
         
     def filter_followers(self,despath,start_node_list):
+        #过滤器，只使用被5整除的粉丝。一类5万左右粉丝使用1万
+        nob=0
         #读取列表
-        f_all=open("../dataset/WDT/Limit200/NBA/follower_relation_all.txt","r",encoding='utf-8')
-        all_followers=[]
+        f_all=open(despath+"follower_relation_all.txt","r",encoding='utf-8')
+        print("读取粉丝："+despath+"follower_relation_all.txt")
         #循环读取文件中的粉丝名
         for relation_str in f_all.readlines():
-            relation=relation_str.split("\t",1)
-            follower_name=relation[1].strip("\n")
-            print(follower_name)
-            #获取关注列表，并根据saveflag决定是否落盘
-            interlist,saveflag,internum=self.get_following(start_node_list,follower_name)
-            if saveflag == False:
-                print("舍弃:"+follower_name+" 稠密度为："+str(internum),file=logfilter)
-            elif saveflag == True:
-                pprint(interlist)
-                print("保留:"+follower_name+" 稠密度为："+str(internum),file=logfilter)
-                for firstnode in interlist :
-                    relation_pair=[firstnode,follower_name]
-                    self.writepair(despath+'follower_relation.txt',relation_pair)
-                pair=[relation[0].strip('\n'),follower_name]
-                self.writepair(despath+'follower_relation.txt',pair)
-                # 存储粉丝关注的初始节点数
-                pair=[follower_name,str(internum)]
-                self.writepair(despath+'followerName_firstNodeNum.txt',pair)
+            #保留五分之一
+            nob=nob+1
+            if (nob%5)==0:
+                relation=relation_str.split("\t",1)
+                follower_name=relation[1].strip("\n")
+                print(follower_name)
+                #获取关注列表，并根据saveflag决定是否落盘
+                interlist,saveflag,internum=self.get_following(start_node_list,follower_name)
+                if saveflag == False:
+                    print("舍弃:"+follower_name+" 稠密度为："+str(internum),file=logfilter)
+                    print("舍弃:"+follower_name+" 稠密度为："+str(internum))
+                elif saveflag == True:
+                    pprint(interlist)
+                    print("保留:"+follower_name+" 稠密度为："+str(internum),file=logfilter)
+                    print("保留:"+follower_name+" 稠密度为："+str(internum))
+                    for firstnode in interlist :
+                        relation_pair=[firstnode,follower_name]
+                        self.writepair(despath+'follower_relation.txt',relation_pair)
+                    pair=[relation[0].strip('\n'),follower_name]
+                    self.writepair(despath+'follower_relation.txt',pair)
+                    # 存储粉丝关注的初始节点数
+                    pair=[follower_name,str(internum)]
+                    self.writepair(despath+'followerName_firstNodeNum.txt',pair)
             
-            
-            # # 先跑一个
-            # print("一个跑完了")
-            # break
-
-
-
 
     def getFollowers_and_Following(self, user_name: str) -> List[Dict]:
         """执行Twitter账号信息爬虫
@@ -345,16 +346,16 @@ class SpiderTwitterAccountInfo(tool.abc.SingleSpider):
                 
 
 
-def spidermain(start_node_list,source_file,desti_path):
+def spidermain(start_node_list):
     winsound.Beep(freq, duration)
     #初始化webdriver
     driverOptions = Options()
     #导入缓存数据
-    driverOptions.add_argument(r"user-data-dir=C:\\Users\\ionicbond\\AppData\\Local\\Google\\Chrome\\User Data\\Default")
+    driverOptions.add_argument(r"user-data-dir=C:\\Users\\HUAWEI\\AppData\\Local\\Google\\Chrome\\User Data") 
     driverOptions.add_experimental_option("excludeSwitches", ['enable-automation', 'enable-logging'])
     #对应的chromedriver路径
     #driverOptions.add_argument('--headless')
-    driver = webdriver.Chrome(executable_path=r"../dataset/WDT/chromedriver.exe",options=driverOptions)
+    driver = webdriver.Chrome(executable_path=r"L:\\社交知识图谱\\联合基金重点项目\\网络爬虫\\NLP-Twitter-main\\chromedriver_win32\\chromedriver.exe",options=driverOptions)
   
     
     # 爬取粉丝信息的部分---------------------------------------------------------------------------------
@@ -375,38 +376,14 @@ def spidermain(start_node_list,source_file,desti_path):
     #         #qname.put(name)
     #         #print(str(name)+"发生异常："+str(e),file=logfile)
 
-    # 筛选粉丝稠密度的部分
-    # SpiderTwitterAccountInfo(driver).filter_followers("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NBA\\",start_node_list)
-    # SpiderTwitterAccountInfo(driver).filter_followers("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NBA\\",start_node_list)
-    SpiderTwitterAccountInfo(driver).filter_followers("../dataset/WDT/Limit200/英超/",start_node_list)
-    SpiderTwitterAccountInfo(driver).filter_followers("../dataset/WDT/Limit200/美国棒球联赛/",start_node_list)
+    # 筛选粉丝稠密度的主函数
+    #SpiderTwitterAccountInfo(driver).filter_followers("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NBA\\",start_node_list)
+    SpiderTwitterAccountInfo(driver).filter_followers("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NFL\\",start_node_list)
+    #SpiderTwitterAccountInfo(driver).filter_followers("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\英超\\",start_node_list)
+    #SpiderTwitterAccountInfo(driver).filter_followers("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\美国棒球联赛\\",start_node_list)
 
-    
+
     driver.quit()
         
 
-from selenium import webdriver
-# ------------------- 单元测试 -------------------
-# if __name__ == "__main__":
-    
-#     # r代表后面的字符串斜杠不转义，''表示python识别空格
-#     # driverOptions.add_argument(r"user-data-dir=C:\Users\loeoe\AppData\Local\Google\Chrome\User''Data\Default\Login''Data")
-    
-#     #初始化webdriver
-#     driverOptions = Options()
-#     #导入缓存数据
-#     driverOptions.add_argument(r"user-data-dir=C:\\Users\\HUAWEI\\AppData\\Local\\Google\\Chrome\\User Data") 
-#     driverOptions.add_experimental_option("excludeSwitches", ['enable-automation', 'enable-logging'])
-#     #对应的chromedriver路径
-#     driverOptions.add_argument('--headless')
-#     driver = webdriver.Chrome(executable_path=r"L:\\社交知识图谱\\联合基金重点项目\\网络爬虫\\NLP-Twitter-main\\chromedriver_win32\\chromedriver.exe",options=driverOptions)
 
-    
-#     f=open("L:\\社交知识图谱\\联合基金重点项目\\网络爬虫\\NLP-Twitter-main\\NLP-Twitter-main\\users.txt",'r')
-#     for name in f.readlines():
-#         print(name)
-#         SpiderTwitterAccountInfo(driver).running("L:\\社交知识图谱\\联合基金重点项目\\网络爬虫\\NLP-Twitter-main\\NLP-Twitter-main\\",SpiderTwitterAccountInfo.get_twitter_user_name(f"https://twitter.com/{name}"))
-   
-    
-
-#     driver.quit()
