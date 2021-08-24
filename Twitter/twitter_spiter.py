@@ -14,7 +14,6 @@ import crawlertool as tool
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from queue import Queue
-import random
 import winsound
 maxfollowers_num=500
 maxfollowing_num=400
@@ -65,50 +64,50 @@ class SpiderTwitterAccountInfo(tool.abc.SingleSpider):
         if pattern := re.search(r"(?<=twitter.com/)[^/]+", page_url):
             return pattern.group()
     
-    def check_Sparse(self,name):
-        actual_url = "https://twitter.com/"+name
-        self.console("开始抓取,实际请求的Url:" + actual_url)
-        self.driver.get(actual_url)
-        time.sleep(3)
-        self.console(f"开始判断{name}的稀疏度")
-        following=0
-        followers=0
+    # def check_Sparse(self,name):
+    #     actual_url = "https://twitter.com/"+name
+    #     self.console("开始抓取,实际请求的Url:" + actual_url)
+    #     self.driver.get(actual_url)
+    #     time.sleep(3)
+    #     self.console(f"开始判断{name}的稀疏度")
+    #     following=0
+    #     followers=0
 
-        #读取关注和被关注数量
-        try:
-            if label := self.driver.find_element_by_xpath(
-                "//*[@id=\"react-root\"]/div/div/div/main/div/div/div/div[1]/div/div/div/div/div[1]/div/div[5]/div[1]/a"):
-                following = tool.extract.number(label.text)
-            elif label := self.driver.find_element_by_xpath(
-                "//*[@id=\"react-root\"]/div/div/div/main/div/div/div/div[1]/div/div/div/div/div[1]/div/div[4]/div[1]/a"):
-                following= tool.extract.number(label.text)
-            else:
-                self.log("Twitter账号:" + name + "|账号正在关注数抓取异常")
-                following = 0
+    #     #读取关注和被关注数量
+    #     try:
+    #         if label := self.driver.find_element_by_xpath(
+    #             "//*[@id=\"react-root\"]/div/div/div/main/div/div/div/div[1]/div/div/div/div/div[1]/div/div[5]/div[1]/a"):
+    #             following = tool.extract.number(label.text)
+    #         elif label := self.driver.find_element_by_xpath(
+    #             "//*[@id=\"react-root\"]/div/div/div/main/div/div/div/div[1]/div/div/div/div/div[1]/div/div[4]/div[1]/a"):
+    #             following= tool.extract.number(label.text)
+    #         else:
+    #             self.log("Twitter账号:" + name + "|账号正在关注数抓取异常")
+    #             following = 0
 
-            if label := self.driver.find_element_by_xpath(
-                "//*[@id=\"react-root\"]/div/div/div/main/div/div/div/div[1]/div/div/div/div/div[1]/div/div[5]/div[2]/a"):
-                followers = tool.extract.number(label.text)
-            elif label := self.driver.find_element_by_xpath(
-                "//*[@id=\"react-root\"]/div/div/div/main/div/div/div/div[1]/div/div/div/div/div[1]/div/div[4]/div[2]/a"):
-                followers = tool.extract.number(label.text)
-            else:
-                self.log("Twitter账号:" + name + "|账号粉丝数抓取异常")
-                followers = 0
+    #         if label := self.driver.find_element_by_xpath(
+    #             "//*[@id=\"react-root\"]/div/div/div/main/div/div/div/div[1]/div/div/div/div/div[1]/div/div[5]/div[2]/a"):
+    #             followers = tool.extract.number(label.text)
+    #         elif label := self.driver.find_element_by_xpath(
+    #             "//*[@id=\"react-root\"]/div/div/div/main/div/div/div/div[1]/div/div/div/div/div[1]/div/div[4]/div[2]/a"):
+    #             followers = tool.extract.number(label.text)
+    #         else:
+    #             self.log("Twitter账号:" + name + "|账号粉丝数抓取异常")
+    #             followers = 0
 
-            self.console(f"followers:{followers}  following:{following}")
-        except:
-            self.console(f"稀疏度爬取失败，用户名{name}")
-            return True
+    #         self.console(f"followers:{followers}  following:{following}")
+    #     except:
+    #         self.console(f"稀疏度爬取失败，用户名{name}")
+    #         return True
         
         
-        #去除小稀疏度的点
-        if followers < 100 :
-            return False
-        elif following < 10 :
-            return False
-        else :
-            return True
+    #     #去除小稀疏度的点
+    #     if followers < 100 :
+    #         return False
+    #     elif following < 10 :
+    #         return False
+    #     else :
+    #         return True
 
     def get_following(self,start_node_list,user_name):
         save=False
@@ -119,8 +118,10 @@ class SpiderTwitterAccountInfo(tool.abc.SingleSpider):
         time.sleep(10)
 
         following_name=[]
-        num=0
+        num=0#交集的数量
+        scan=0#扫描的节点数量
         exitflag=False
+        save=False
         #这部分下拉加载所有的粉丝
         old_scroll_height = 0 #表明页面在最上端
         js1 = 'return document.body.scrollHeight'#获取页面高度的javascript语句
@@ -145,6 +146,8 @@ class SpiderTwitterAccountInfo(tool.abc.SingleSpider):
                     str1=following.text
                     str1=str1[1:]
                     str1=str1.strip("\n")
+
+                    scan=scan+1#浏览的节点数加一
                     
                     #发现连接到初始节点的边，加入返回list，num++，判断是否到阈值
                     if str1 in start_node_list:
@@ -153,14 +156,16 @@ class SpiderTwitterAccountInfo(tool.abc.SingleSpider):
                         print("当前following 初始node 数量："+str(len(following_name)))
                         #交集大于阈值，退出，save设为true
                         if num >= min_interaction:
+                            print("-----判断结果设为true")
                             save=True
                             # 交集大于最大关系数，直接退出
                             if num >max_interaction:
+                                print("退出，交集大小为为"+str(num))
                                 exitflag=True
                                 break
                     #当浏览了超过一定数量的following，直接退出
-                    if len(following_name)>maxfollowers_num :
-                        save=False
+                    if scan>maxfollowing :
+                        print("退出，浏览数为"+str(scan))
                         exitflag=True
                         break
                         
@@ -171,12 +176,14 @@ class SpiderTwitterAccountInfo(tool.abc.SingleSpider):
             if exitflag==True:
                 print(str(user_name)+"判断结果为："+str(save))
                 break
-
+        print("爬取了所有following"+"，总共扫描"+str(scan)+"判断结果"+str(save))
         return following_name,save,num
         
     def filter_followers(self,despath,start_node_list):
         #过滤器，只使用被5整除的粉丝。一类5万左右粉丝使用1万
         nob=0
+        #失败列表
+        faillist=[]
         #读取列表
         f_all=open(despath+"follower_relation_all.txt","r",encoding='utf-8')
         print("读取粉丝："+despath+"follower_relation_all.txt")
@@ -189,22 +196,33 @@ class SpiderTwitterAccountInfo(tool.abc.SingleSpider):
                 follower_name=relation[1].strip("\n")
                 print(follower_name)
                 #获取关注列表，并根据saveflag决定是否落盘
-                interlist,saveflag,internum=self.get_following(start_node_list,follower_name)
-                if saveflag == False:
-                    print("舍弃:"+follower_name+" 稠密度为："+str(internum),file=logfilter)
-                    print("舍弃:"+follower_name+" 稠密度为："+str(internum))
-                elif saveflag == True:
-                    pprint(interlist)
-                    print("保留:"+follower_name+" 稠密度为："+str(internum),file=logfilter)
-                    print("保留:"+follower_name+" 稠密度为："+str(internum))
-                    for firstnode in interlist :
-                        relation_pair=[firstnode,follower_name]
-                        self.writepair(despath+'follower_relation.txt',relation_pair)
-                    pair=[relation[0].strip('\n'),follower_name]
-                    self.writepair(despath+'follower_relation.txt',pair)
-                    # 存储粉丝关注的初始节点数
-                    pair=[follower_name,str(internum)]
-                    self.writepair(despath+'followerName_firstNodeNum.txt',pair)
+                try:
+                    interlist,saveflag,internum=self.get_following(start_node_list,follower_name)
+
+                    if saveflag == False:
+                        print("舍弃:"+follower_name+" 稠密度为："+str(internum),file=logfilter)
+                        print("舍弃:"+follower_name+" 稠密度为："+str(internum))
+                    elif saveflag == True:
+                        pprint(interlist)
+                        print("保留:"+follower_name+" 稠密度为："+str(internum),file=logfilter)
+                        print("保留:"+follower_name+" 稠密度为："+str(internum))
+                        for firstnode in interlist :
+                            relation_pair=[firstnode,follower_name]
+                            self.writepair(despath+'follower_relation.txt',relation_pair)
+                        pair=[relation[0].strip('\n'),follower_name]
+                        self.writepair(despath+'follower_relation.txt',pair)
+                        # 存储粉丝关注的初始节点数
+                        pair=[follower_name,str(internum)]
+                        self.writepair(despath+'followerName_firstNodeNum.txt',pair)
+                except:
+                    print("爬取失败"+follower_name+"加入失败队列")
+                    faillist.append(follower_name)
+        #失败节点写入失败文件夹
+        failf=open(despath+'fail_nodes.txt',"a+")
+        for line in faillist:
+            failf.write(line+"\n")
+        failf.close()
+
             
 
     def getFollowers_and_Following(self, user_name: str) -> List[Dict]:
@@ -345,8 +363,8 @@ class SpiderTwitterAccountInfo(tool.abc.SingleSpider):
         #     self.writepair(despath+'follower_relation_all.txt',following_pair)
                 
 
-
-def spidermain(start_node_list):
+#粉丝爬取主函数
+def spidermain(start_node_list,source_file,desti_path):
     winsound.Beep(freq, duration)
     #初始化webdriver
     driverOptions = Options()
@@ -358,23 +376,46 @@ def spidermain(start_node_list):
     driver = webdriver.Chrome(executable_path=r"L:\\社交知识图谱\\联合基金重点项目\\网络爬虫\\NLP-Twitter-main\\chromedriver_win32\\chromedriver.exe",options=driverOptions)
   
     
-    # 爬取粉丝信息的部分---------------------------------------------------------------------------------
-    # f=open(source_file,'r')
-    # qname=queue.Queue(0)
-    # for name in f.readlines():
-    #     name=name.strip('\n')
-    #     qname.put(name)
+    #爬取粉丝信息的部分---------------------------------------------------------------------------------
+    f=open(source_file,'r')
+    qname=queue.Queue(0)
+    for name in f.readlines():
+        name=name.strip('\n')
+        qname.put(name)
         
-    # while qname.empty() !=True :
-    #     name=qname.get()
-    #     try:
-    #         SpiderTwitterAccountInfo(driver).running(start_node_list,SpiderTwitterAccountInfo.get_twitter_user_name(f"https://twitter.com/{name}").strip('\n'),desti_path)
-    #         print("已完成："+str(name))
-    #     except Exception as e:
-    #         #爬取过程中出现异常，重新尝试
-    #         traceback.print_exc()
-    #         #qname.put(name)
-    #         #print(str(name)+"发生异常："+str(e),file=logfile)
+    while qname.empty() !=True :
+        name=qname.get()
+        try:
+            SpiderTwitterAccountInfo(driver).running(start_node_list,SpiderTwitterAccountInfo.get_twitter_user_name(f"https://twitter.com/{name}").strip('\n'),desti_path)
+            print("已完成："+str(name))
+        except Exception as e:
+            #爬取过程中出现异常，重新尝试
+            traceback.print_exc()
+            #qname.put(name)
+            #print(str(name)+"发生异常："+str(e),file=logfile)
+
+    # 筛选粉丝稠密度的主函数
+    #SpiderTwitterAccountInfo(driver).filter_followers("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NBA\\",start_node_list)
+    #SpiderTwitterAccountInfo(driver).filter_followers("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NFL\\",start_node_list)
+    #SpiderTwitterAccountInfo(driver).filter_followers("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\英超\\",start_node_list)
+    #SpiderTwitterAccountInfo(driver).filter_followers("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\美国棒球联赛\\",start_node_list)
+
+
+    driver.quit()
+    
+
+#筛选主函数
+def spidermain_filter(start_node_list):
+    winsound.Beep(freq, duration)
+    #初始化webdriver
+    driverOptions = Options()
+    #导入缓存数据
+    driverOptions.add_argument(r"user-data-dir=C:\\Users\\HUAWEI\\AppData\\Local\\Google\\Chrome\\User Data") 
+    driverOptions.add_experimental_option("excludeSwitches", ['enable-automation', 'enable-logging'])
+    #对应的chromedriver路径
+    #driverOptions.add_argument('--headless')
+    driver = webdriver.Chrome(executable_path=r"L:\\社交知识图谱\\联合基金重点项目\\网络爬虫\\NLP-Twitter-main\\chromedriver_win32\\chromedriver.exe",options=driverOptions)
+
 
     # 筛选粉丝稠密度的主函数
     #SpiderTwitterAccountInfo(driver).filter_followers("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NBA\\",start_node_list)
@@ -384,6 +425,32 @@ def spidermain(start_node_list):
 
 
     driver.quit()
-        
+
+
+#————————————————开始筛选
+#获取对应类型的社交网络
+start_node_list=[]
+f=open("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NBA\\twittername.txt","r",encoding='utf-8')
+for name in f.readlines():
+    name=name.strip("\n")
+    start_node_list.append(name)
+f.close()
+f=open("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NFL\\twittername.txt","r",encoding='utf-8')
+for name in f.readlines():
+    name=name.strip("\n")
+    start_node_list.append(name)
+f.close()
+f=open("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NHL\\twittername.txt","r",encoding='utf-8')
+for name in f.readlines():
+    name=name.strip("\n")
+    start_node_list.append(name)
+f.close()
+f=open("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\美国棒球联赛\\twittername.txt","r",encoding='utf-8')
+for name in f.readlines():
+    name=name.strip("\n")
+    start_node_list.append(name)
+f.close()
+
+spidermain_filter(start_node_list)
 
 

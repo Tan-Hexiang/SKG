@@ -145,7 +145,7 @@ for name in f.readlines():
     name=name.strip("\n")
     start_node_list.append(name)
 f.close()
-f=open("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\英超\\twittername.txt","r",encoding='utf-8')
+f=open("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NHL\\twittername.txt","r",encoding='utf-8')
 for name in f.readlines():
     name=name.strip("\n")
     start_node_list.append(name)
@@ -155,10 +155,10 @@ for name in f.readlines():
     name=name.strip("\n")
     start_node_list.append(name)
 f.close()
-
-
+#爬取粉丝
+twitter_spiter.spidermain(start_node_list,"L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NHL\\twittername.txt","L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NHL\\")
 
 #启动入口
-twitter_spiter.spidermain(start_node_list)
+#twitter_spiter.spidermain(start_node_list)
 
 
