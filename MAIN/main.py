@@ -32,10 +32,10 @@ assert (args.KG_model in ['RGCN', 'HGT', 'None'])
 assert (args.SN_model in ['GCN', 'GAT', 'GAE', 'None'])
 assert (args.task in ['KG_NC', 'KG_LP', 'SN_NC', 'SN_LP', 'Align'])
 assert (args.KG_model != 'None' or args.SN_model != 'None')
-if args.KG_model == 'None' and 'KG' in args.task:
-    assert True
-if args.SN_model == 'None' and 'SN' in args.task:
-    assert True
+assert (args.KG_model != 'None' or 'KG' not in args.task)
+assert (args.KG_model != 'None' or 'Align' not in args.task)
+assert (args.SN_model != 'None' or 'SN' not in args.task)
+assert (args.SN_model != 'None' or 'Align' not in args.task)
 
 if args.cuda != -1:
     device = torch.device("cuda:" + str(args.cuda))
@@ -96,7 +96,7 @@ def KG_data_prepare():
                                        in_dim=args.hidden_dim,# input dim现在必须得和隐藏层维度相同，因为i2h层没有办法把维度降下来
                                        hidden_dim=args.hidden_dim,
                                        out_dim=num_classes,
-                                       num_hidden_layers=args.n_layers - 2,
+                                       num_hidden_layers=args.n_layers,
                                        dropout=args.dropout,
                                        use_self_loop=args.use_self_loop)
         else:#if args.KG_model == 'HGT':
@@ -104,7 +104,7 @@ def KG_data_prepare():
                                         in_dim=args.in_dim,
                                         hidden_dim=args.hidden_dim,
                                         out_dim=num_classes,
-                                        n_layers=2,
+                                        n_layers=args.n_layers,
                                         n_heads=4,
                                         use_norm=True)
         # elif args.KG_model == 'None':
@@ -195,7 +195,7 @@ def SN_data_prepare():
 
     SN = dgl.remove_self_loop(SN)
     SN = dgl.add_self_loop(SN)
-    print(SN_forward)
+
     if args.task == 'SN_NC':
         features = SN.ndata['feature'].to(device)
         labels = SN.ndata['label'].to(device)
@@ -294,30 +294,33 @@ if __name__ == '__main__':
     if args.task == 'KG_NC':
         KG, model_KG, category_KG, labels_KG, train_idx_KG, valid_idx_KG, \
         test_idx_KG, KG_forward, KG_backward = KG_data_prepare()
-        SN, model_SN, feature_SN, val_edges_SN, val_edges_false_SN, \
-        test_edges_SN, test_edges_false_SN, SN_forward, SN_backward = SN_data_prepare()
+        if args.SN_model != 'None':
+            SN, model_SN, feature_SN, val_edges_SN, val_edges_false_SN, \
+            test_edges_SN, test_edges_false_SN, SN_forward, SN_backward = SN_data_prepare()
+            adj_SN = SN.adjacency_matrix().to_dense().to(device)
+            weight_tensor_SN, norm_SN = data_process_SN.compute_loss_para_LP(adj_SN, device)
+            model = Model_KG_NC(model_KG, model_SN, args.in_dim, args.hidden_dim).to(device)
+        else:
+            model = model_KG
 
         if args.dataset == 'OAG':
             # 多标签分类
             crition_KG = torch.nn.BCEWithLogitsLoss()
         elif args.dataset == 'WDT':
             crition_KG = torch.nn.CrossEntropyLoss()
-
-        adj_SN = SN.adjacency_matrix().to_dense().to(device)
-        weight_tensor_SN, norm_SN = data_process_SN.compute_loss_para_LP(adj_SN, device)
-        model = Model_KG_NC(model_KG, model_SN, args.in_dim, args.hidden_dim).to(device)
-    elif args.task in ['KG_LP', 'SN_LP', 'Align']:
+    # elif args.task in ['KG_LP', 'SN_LP', 'Align']:
+    elif args.task == 'KG_LP':
         KG, model_KG, triplet, val_edges_KG, val_edges_false_KG, test_edges_KG, \
         test_edges_false_KG, KG_forward, KG_backward = KG_data_prepare()
-        SN, model_SN, feature_SN, val_edges_SN, val_edges_false_SN, \
-        test_edges_SN, test_edges_false_SN, SN_forward, SN_backward = SN_data_prepare()
-
-        adj_SN = SN.adjacency_matrix().to_dense().to(device)
-        weight_tensor_SN, norm_SN = data_process_SN.compute_loss_para_LP(adj_SN, device)
-        model = Model_KG_LP(model_KG, model_SN, args.in_dim, args.hidden_dim).to(device)
+        if args.SN_model != 'None':
+            SN, model_SN, feature_SN, val_edges_SN, val_edges_false_SN, \
+            test_edges_SN, test_edges_false_SN, SN_forward, SN_backward = SN_data_prepare()
+            adj_SN = SN.adjacency_matrix().to_dense().to(device)
+            weight_tensor_SN, norm_SN = data_process_SN.compute_loss_para_LP(adj_SN, device)
+            model = Model_KG_LP(model_KG, model_SN, args.in_dim, args.hidden_dim).to(device)
+        else:
+            model = model_KG
     elif args.task == 'SN_NC':
-        KG, model_KG, triplet, val_edges_KG, val_edges_false_KG, test_edges_KG, \
-        test_edges_false_KG, KG_forward, KG_backward = KG_data_prepare()
         SN, model_SN, labels_SN, feature_SN, train_idx_SN, valid_idx_SN, \
         test_idx_SN, SN_forward, SN_backward = SN_data_prepare()
 
@@ -325,15 +328,42 @@ if __name__ == '__main__':
             crition_SN = torch.nn.BCEWithLogitsLoss()
         elif args.dataset == 'WDT':
             crition_SN = torch.nn.CrossEntropyLoss()
-        model = Model_SN_NC(model_KG, model_SN, args.in_dim, args.hidden_dim).to(device)
 
+        if args.KG_model != 'None':
+            KG, model_KG, triplet, val_edges_KG, val_edges_false_KG, test_edges_KG, \
+            test_edges_false_KG, KG_forward, KG_backward = KG_data_prepare()
+            model = Model_SN_NC(model_KG, model_SN, args.in_dim, args.hidden_dim).to(device)
+        else:
+            model = model_SN
+    elif args.task == 'SN_LP':
+        SN, model_SN, feature_SN, val_edges_SN, val_edges_false_SN, \
+        test_edges_SN, test_edges_false_SN, SN_forward, SN_backward = SN_data_prepare()
+        adj_SN = SN.adjacency_matrix().to_dense().to(device)
+        weight_tensor_SN, norm_SN = data_process_SN.compute_loss_para_LP(adj_SN, device)
+
+        if args.KG_model != 'None':
+            KG, model_KG, triplet, val_edges_KG, val_edges_false_KG, test_edges_KG, \
+            test_edges_false_KG, KG_forward, KG_backward = KG_data_prepare()
+            model = Model_KG_LP(model_KG, model_SN, args.in_dim, args.hidden_dim).to(device)
+        else:
+            model = model_SN
+    elif args.task == 'Align':
+        KG, model_KG, triplet, val_edges_KG, val_edges_false_KG, test_edges_KG, \
+        test_edges_false_KG, KG_forward, KG_backward = KG_data_prepare()
+
+        SN, model_SN, feature_SN, val_edges_SN, val_edges_false_SN, \
+        test_edges_SN, test_edges_false_SN, SN_forward, SN_backward = SN_data_prepare()
+        adj_SN = SN.adjacency_matrix().to_dense().to(device)
+        weight_tensor_SN, norm_SN = data_process_SN.compute_loss_para_LP(adj_SN, device)
+        model = Model_KG_LP(model_KG, model_SN, args.in_dim, args.hidden_dim).to(device)
 
     # 生成实体对齐的训练集
-    node_align_KG_train, node_align_KG_valid, node_align_KG_test, \
-    node_align_SN_train, node_align_SN_valid, node_align_SN_test = \
-        data_process_MAIN.node_align_split(args, KG_forward, KG_backward, SN_forward, SN_backward, device)
-    node_align_KG_train = node_align_KG_train.repeat(args.neg_num)
-    node_align_SN_train = node_align_SN_train.repeat(args.neg_num)
+    if args.KG_model != 'None' and args.SN_model != 'None':
+        node_align_KG_train, node_align_KG_valid, node_align_KG_test, \
+        node_align_SN_train, node_align_SN_valid, node_align_SN_test = \
+            data_process_MAIN.node_align_split(args, KG_forward, KG_backward, SN_forward, SN_backward, device)
+        node_align_KG_train = node_align_KG_train.repeat(args.neg_num)
+        node_align_SN_train = node_align_SN_train.repeat(args.neg_num)
 
     # 优化器可以进行选择
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
@@ -346,7 +376,7 @@ if __name__ == '__main__':
 
     early_stopper = data_process_MAIN.EarlyStopMonitor(max_round=args.max_round, min_epoch=args.min_epoch,
                                                        tolerance=args.tolerance)
-    print(SN_forward)
+    print(model)
 
     for epoch in range(args.epochs):
         t = time.time()
@@ -354,104 +384,121 @@ if __name__ == '__main__':
         model.train()
 
         if args.task == 'KG_NC':
-            logits_KG, res_mi_KG, res_local_KG, logits_SN, embed_SN, trans_SN, res_mi_SN, res_local_SN = \
-                model(category_KG, SN, feature_SN, adj_SN, args.neg_num, device)
+            if args.SN_model == 'None':
+                logits_KG = model()[category_KG]
+            else:
+                logits_KG, res_mi_KG, res_local_KG, logits_SN, embed_SN, trans_SN, res_mi_SN, res_local_SN = \
+                    model(category_KG, SN, feature_SN, adj_SN, args.neg_num, device)
+                # 这里返回的logits已经经过sigmoid，GAE使用整张图作为训练样本
+                loss_SN = norm_SN * F.binary_cross_entropy(logits_SN.view(-1), adj_SN.view(-1), weight=weight_tensor_SN)
             # 多分类的损失函数要求label类型是torch.long，且维度是num*1，维度1的表示第几类
             if args.dataset == 'OAG':
                 loss_KG = crition_KG(logits_KG[train_idx_KG], labels_KG[train_idx_KG])
             elif args.dataset == 'WDT':
                 loss_KG = crition_KG(logits_KG[train_idx_KG], labels_KG[train_idx_KG].argmax(dim=1))
-            # 这里返回的logits已经经过sigmoid，GAE使用整张图作为训练样本
-            loss_SN = norm_SN * F.binary_cross_entropy(logits_SN.view(-1), adj_SN.view(-1), weight=weight_tensor_SN)
-        elif args.task in ['KG_LP', 'SN_LP', 'Align']:
+        elif args.task == 'KG_LP':
             negative_graph_KG = data_process_KG.construct_negative_graph_LP(KG, args.neg_num, triplet, device)
-            # print(feature_SN, model_SN)
+            if args.SN_model == 'None':
+                pos_score_KG, neg_score_KG = model(negative_graph_KG, triplet)
+            else:
+                pos_score_KG, neg_score_KG, res_mi_KG, res_local_KG, \
+                logits_SN, embed_SN, trans_SN, res_mi_SN, res_local_SN = \
+                    model(KG, negative_graph_KG, triplet, SN, feature_SN, adj_SN, args.neg_num, device)
+                loss_SN = norm_SN * F.binary_cross_entropy(logits_SN.view(-1), adj_SN.view(-1), weight=weight_tensor_SN)
+            loss_KG = data_process_KG.compute_loss_LP(pos_score_KG, neg_score_KG)
+        elif args.task == 'SN_NC':
+            if args.KG_model == 'None':
+                logits_SN, embed_SN, h_w_SN = model(feature_SN)
+            else:
+                negative_graph_KG = data_process_KG.construct_negative_graph_LP(KG, args.neg_num, triplet, device)
+                pos_score_KG, neg_score_KG, res_mi_KG, res_local_KG, \
+                logits_SN, embed_SN, trans_SN, res_mi_SN, res_local_SN = \
+                    model(KG, negative_graph_KG, triplet, SN, feature_SN, args.neg_num, device)
+                loss_KG = data_process_KG.compute_loss_LP(pos_score_KG, neg_score_KG)
+            if args.dataset == 'OAG':
+                loss_SN = crition_SN(logits_SN[train_idx_SN], labels_SN[train_idx_SN])
+            elif args.dataset == 'WDT':
+                loss_SN = crition_SN(logits_SN[train_idx_SN], labels_SN[train_idx_SN].argmax(dim=1))
+        elif args.task == 'SN_LP':
+            if args.KG_model == 'None':
+                logits_SN, embed_SN, h_w_SN = model(feature_SN)
+            else:
+                negative_graph_KG = data_process_KG.construct_negative_graph_LP(KG, args.neg_num, triplet, device)
+                pos_score_KG, neg_score_KG, res_mi_KG, res_local_KG, \
+                logits_SN, embed_SN, trans_SN, res_mi_SN, res_local_SN = \
+                    model(KG, negative_graph_KG, triplet, SN, feature_SN, adj_SN, args.neg_num, device)
+                loss_KG = data_process_KG.compute_loss_LP(pos_score_KG, neg_score_KG)
+            loss_SN = norm_SN * F.binary_cross_entropy(logits_SN.view(-1), adj_SN.view(-1), weight=weight_tensor_SN)
+        elif args.task == 'Align':
+            negative_graph_KG = data_process_KG.construct_negative_graph_LP(KG, args.neg_num, triplet, device)
             pos_score_KG, neg_score_KG, res_mi_KG, res_local_KG, \
             logits_SN, embed_SN, trans_SN, res_mi_SN, res_local_SN = \
                 model(KG, negative_graph_KG, triplet, SN, feature_SN, adj_SN, args.neg_num, device)
             loss_KG = data_process_KG.compute_loss_LP(pos_score_KG, neg_score_KG)
             loss_SN = norm_SN * F.binary_cross_entropy(logits_SN.view(-1), adj_SN.view(-1), weight=weight_tensor_SN)
-        elif args.task == 'SN_NC':
-            negative_graph_KG = data_process_KG.construct_negative_graph_LP(KG, args.neg_num, triplet, device)
-            pos_score_KG, neg_score_KG, res_mi_KG, res_local_KG, \
-            logits_SN, embed_SN, trans_SN, res_mi_SN, res_local_SN = \
-                model(KG, negative_graph_KG, triplet, SN, feature_SN, args.neg_num, device)
-            loss_KG = data_process_KG.compute_loss_LP(pos_score_KG, neg_score_KG)
+
+        # 计算互信息损失和实体对齐损失
+        if args.KG_model != 'None' and args.SN_model != 'None':
+            # 计算互信息损失
+            res_mi_KG_pos, res_mi_KG_neg = res_mi_KG
+            res_local_KG_pos, res_local_KG_neg = res_local_KG
+            res_mi_SN_pos, res_mi_SN_neg = res_mi_SN
+            res_local_SN_pos, res_local_SN_neg = res_local_SN
+            loss_KG_MI = args.alpha * process_GMI.mi_loss_jsd(res_mi_KG_pos, res_mi_KG_neg) + \
+                         args.beta * process_GMI.mi_loss_jsd(res_local_KG_pos, res_local_KG_neg)
+            loss_SN_MI = args.alpha * process_GMI.mi_loss_jsd(res_mi_SN_pos, res_mi_SN_neg) + \
+                         args.beta * process_GMI.mi_loss_jsd(res_local_SN_pos, res_local_SN_neg)
+
+            # 实体对齐损失函数
+            # 损失函数增加负采样，这里的负样本从社交网络中选取，因为社交网络的作者节点多
+            loss_align = 0
             if args.dataset == 'OAG':
-                loss_SN = crition_SN(logits_SN[train_idx_SN], labels_SN[train_idx_SN])
-            elif args.dataset == 'WDT':
-                loss_SN = crition_SN(logits_SN[train_idx_SN], labels_SN[train_idx_SN].argmax(dim=1))
+                align_target = 'author'
+            else:
+                align_target = 'person'
 
+            node_align_KG_neg = torch.randint(0, KG.num_nodes(align_target), (len(node_align_KG_train),)).to(device)
+                # node_align_SN_neg = torch.randint(0, SN.num_nodes(), (len(node_align_SN_train),)).to(device)
+            node_align_SN_neg = torch.randint(0, SN.num_nodes(), (len(node_align_SN_train),)).to(device)
+            if args.align_dist == 'L2':
+                # 向量间的距离作为损失函数
+                metrix_pos = KG.nodes[align_target].data['h'][node_align_KG_train] - trans_SN[node_align_SN_train]
+                metrix_neg = KG.nodes[align_target].data['h'][node_align_KG_neg] - trans_SN[node_align_SN_neg]
+                res_pos = torch.sqrt(torch.sum(metrix_pos * metrix_pos, dim=1))
+                res_neg = torch.sqrt(torch.sum(metrix_neg * metrix_neg, dim=1))
+                results = args.margin + res_pos - res_neg
+                for result in results:
+                    loss_align += max(0, result)
+            elif args.align_dist == 'L1':
+                metrix_pos = KG.nodes[align_target].data['h'][node_align_KG_train] - trans_SN[node_align_SN_train]
+                metrix_neg1 = KG.nodes[align_target].data['h'][node_align_KG_train] - trans_SN[node_align_SN_neg]
+                metrix_neg2 = KG.nodes[align_target].data['h'][node_align_KG_neg] - trans_SN[node_align_SN_train]
+                res_pos = torch.sum(torch.abs(metrix_pos), dim=1)
+                res_neg1 = torch.sum(torch.abs(metrix_neg1), dim=1)
+                res_neg2 = torch.sum(torch.abs(metrix_neg2), dim=1)
+                results1 = args.margin + res_pos - res_neg1
+                results2 = args.margin + res_pos - res_neg2
+                for result in results1:
+                    loss_align += max(0, result)
+                for result in results2:
+                    loss_align += max(0, result)
 
-
-
-        # 计算互信息损失
-        res_mi_KG_pos, res_mi_KG_neg = res_mi_KG
-        res_local_KG_pos, res_local_KG_neg = res_local_KG
-        res_mi_SN_pos, res_mi_SN_neg = res_mi_SN
-        res_local_SN_pos, res_local_SN_neg = res_local_SN
-        loss_KG_MI = args.alpha * process_GMI.mi_loss_jsd(res_mi_KG_pos, res_mi_KG_neg) + \
-                     args.beta * process_GMI.mi_loss_jsd(res_local_KG_pos, res_local_KG_neg)
-        loss_SN_MI = args.alpha * process_GMI.mi_loss_jsd(res_mi_SN_pos, res_mi_SN_neg) + \
-                     args.beta * process_GMI.mi_loss_jsd(res_local_SN_pos, res_local_SN_neg)
-
-        # 实体对齐损失函数
-        # 损失函数增加负采样，这里的负样本从社交网络中选取，因为社交网络的作者节点多
-        loss_align = 0
-        if args.dataset == 'OAG':
-            align_target = 'author'
-        else:
-            align_target = 'person'
-
-        # print(embed_SN[node_align_SN_valid])
-        # print(trans_SN[node_align_SN_valid])
-        # print(KG.nodes[align_target].data['h'][node_align_KG_valid])
-        # 每十轮生成负样本
-        # if epoch % 10 == 0:
-            # node_align_KG_neg = node_align_KG_train
-        node_align_KG_neg = torch.randint(0, KG.num_nodes(align_target), (len(node_align_KG_train),)).to(device)
-            # node_align_SN_neg = torch.randint(0, SN.num_nodes(), (len(node_align_SN_train),)).to(device)
-        node_align_SN_neg = torch.randint(0, SN.num_nodes(), (len(node_align_SN_train),)).to(device)
-        if args.align_dist == 'L2':
-            # 向量间的距离作为损失函数
-            metrix_pos = KG.nodes[align_target].data['h'][node_align_KG_train] - trans_SN[node_align_SN_train]
-            metrix_neg = KG.nodes[align_target].data['h'][node_align_KG_neg] - trans_SN[node_align_SN_neg]
-            res_pos = torch.sqrt(torch.sum(metrix_pos * metrix_pos, dim=1))
-            res_neg = torch.sqrt(torch.sum(metrix_neg * metrix_neg, dim=1))
-            results = args.margin + res_pos - res_neg
-            for result in results:
-                loss_align += max(0, result)
-        elif args.align_dist == 'L1':
-            metrix_pos = KG.nodes[align_target].data['h'][node_align_KG_train] - trans_SN[node_align_SN_train]
-            metrix_neg1 = KG.nodes[align_target].data['h'][node_align_KG_train] - trans_SN[node_align_SN_neg]
-            metrix_neg2 = KG.nodes[align_target].data['h'][node_align_KG_neg] - trans_SN[node_align_SN_train]
-            res_pos = torch.sum(torch.abs(metrix_pos), dim=1)
-            res_neg1 = torch.sum(torch.abs(metrix_neg1), dim=1)
-            res_neg2 = torch.sum(torch.abs(metrix_neg2), dim=1)
-            results1 = args.margin + res_pos - res_neg1
-            results2 = args.margin + res_pos - res_neg2
-            for result in results1:
-                loss_align += max(0, result)
-            for result in results2:
-                loss_align += max(0, result)
-
-        elif args.align_dist == 'cos':
-            # dim=1，计算行向量的相似度
-            res_pos = torch.cosine_similarity(KG.nodes[align_target].data['h'][node_align_KG_train], trans_SN[node_align_SN_train], dim=1)
-            res_neg = torch.cosine_similarity(KG.nodes[align_target].data['h'][node_align_KG_neg], trans_SN[node_align_SN_neg], dim=1)
-            # 余弦相似度在[-1, 1]间，为1相似度高，损失函数就小
-            results = args.margin - res_pos + res_neg
-            for result in results:
-                loss_align += max(0, result)
-        loss_align /= len(node_align_KG_train)
+            elif args.align_dist == 'cos':
+                # dim=1，计算行向量的相似度
+                res_pos = torch.cosine_similarity(KG.nodes[align_target].data['h'][node_align_KG_train], trans_SN[node_align_SN_train], dim=1)
+                res_neg = torch.cosine_similarity(KG.nodes[align_target].data['h'][node_align_KG_neg], trans_SN[node_align_SN_neg], dim=1)
+                # 余弦相似度在[-1, 1]间，为1相似度高，损失函数就小
+                results = args.margin - res_pos + res_neg
+                for result in results:
+                    loss_align += max(0, result)
+            loss_align /= len(node_align_KG_train)
 
         if args.KG_model == 'None':
             loss = loss_SN
         elif args.SN_model == 'None':
             loss = loss_KG
         elif args.task == 'Align':
-            # loss = loss_align
-            loss = 2*loss_align + loss_KG+loss_SN+loss_KG_MI+loss_SN_MI
+            loss = loss_align
         else:
             loss = args.w_KG*loss_KG + args.w_SN*loss_SN + \
                    args.w_KG_MI*loss_KG_MI + args.w_SN_MI*loss_SN_MI + \
@@ -515,13 +562,7 @@ if __name__ == '__main__':
                     model = early_stopper.model
                     break
             elif args.task == 'Align':
-                # print(KG.nodes[align_target].data['h'][node_align_KG_valid[0]])
-                # print(KG.nodes[align_target].data['h'][node_align_KG_valid[1]])
-                # print('\n\n')
-                # print(trans_SN[0])
                 # 实体对齐的指标MRR，hits@10
-                # 知识图谱的节点向量KG.nodes[align_target].data['h'][node_align_KG_train]
-                # 社交网络的节点向量trans_SN[node_align_SN_train]
                 val_MRR_align, val_hits_align = data_process_MAIN.align_scores(
                     KG.nodes[align_target].data['h'],
                     trans_SN,
@@ -545,19 +586,25 @@ if __name__ == '__main__':
 
     # 测试
     if args.task == 'KG_NC':
-        logits_KG, res_mi_KG, res_local_KG, logits, features, trans_SN, res_mi_SN, res_local_SN = \
-            model(category_KG, SN, feature_SN, adj_SN, args.neg_num, device)
+        if args.SN_model == 'None':
+            logits_KG = model()[category_KG]
+        else:
+            logits_KG, res_mi_KG, res_local_KG, logits, features, trans_SN, res_mi_SN, res_local_SN = \
+                model(category_KG, SN, feature_SN, adj_SN, args.neg_num, device)
         test_micro_f1_KG, test_macro_f1_KG, _, _ = data_process_KG.get_score_NC(logits_KG, labels_KG, test_idx_KG)
         print("test_micro_f1_KG=", "{:.5f}".format(test_micro_f1_KG),
               "test_macro_f1_KG=", "{:.5f}".format(test_macro_f1_KG))
     elif args.task == 'KG_LP':
         test_roc_KG, test_ap_KG = data_process_KG.get_score_LP(KG, test_edges_KG, test_edges_false_KG, triplet)
-        print("test_roc_SN=", "{:.5f}".format(test_roc_KG),
-              "test_ap_SN=", "{:.5f}".format(test_ap_KG))
+        print("test_roc_KG=", "{:.5f}".format(test_roc_KG),
+              "test_ap_KG=", "{:.5f}".format(test_ap_KG))
     elif args.task == 'SN_NC':
-        negative_graph_KG = data_process_KG.construct_negative_graph_LP(KG, args.neg_num, triplet, device)
-        _, _, _, _, logits_SN, _, _, _, _ = \
-            model(KG, negative_graph_KG, triplet, SN, feature_SN, args.neg_num, device)
+        if args.KG_model == 'None':
+            logits_SN, embed_SN, h_w_SN = model(feature_SN)
+        else:
+            negative_graph_KG = data_process_KG.construct_negative_graph_LP(KG, args.neg_num, triplet, device)
+            _, _, _, _, logits_SN, _, _, _, _ = \
+                model(KG, negative_graph_KG, triplet, SN, feature_SN, args.neg_num, device)
         test_micro_f1_SN, test_macro_f1_SN, _, _ = data_process_SN.get_score_NC(logits_SN, labels_SN, test_idx_SN)
         print("test_micro_f1_SN=", "{:.5f}".format(test_micro_f1_SN),
               "test_macro_f1_SN=", "{:.5f}".format(test_macro_f1_SN))
