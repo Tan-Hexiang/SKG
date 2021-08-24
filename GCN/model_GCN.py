@@ -63,11 +63,13 @@ class GCN_LP(nn.Module):
         self.g = g
         self.layers = nn.ModuleList()
         # input layer
-        self.layers.append(GraphConv(in_dim, hidden_dim, activation=activation,allow_zero_in_degree=True))
+        self.layers.append(GraphConv(in_dim, hidden_dim, activation=activation,allow_zero_in_degree=True, weight=True))
         # hidden layers
         for i in range(n_layers):
-            self.layers.append(GraphConv(hidden_dim, hidden_dim, activation=activation, allow_zero_in_degree=True))
+            self.layers.append(GraphConv(hidden_dim, hidden_dim, activation=activation, allow_zero_in_degree=True,
+                                         weight=True))
         self.dropout = nn.Dropout(p=dropout)
+        self.norm = nn.LayerNorm(hidden_dim)
         self.fc = nn.Linear(in_dim, hidden_dim, bias=False)
 
     def forward(self, features):
@@ -76,7 +78,11 @@ class GCN_LP(nn.Module):
             if i != 0:
                 h = self.dropout(h)
             h = layer(self.g, h)
+
         adj_rec = torch.sigmoid(torch.matmul(h, h.t()))
         # 将特征进行线性变换，用来进行对比学习
         seq_fts = self.fc(features)
+        # GCN模型的问题，相邻节点会逐渐趋同，所以加上线性变换，让相邻节点有所不同
+        h = h+seq_fts
+        h = self.norm(h)
         return adj_rec, h, seq_fts
