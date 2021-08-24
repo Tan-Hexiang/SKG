@@ -20,17 +20,16 @@ def align_scores(embed_KG, trans_SN, node_align_KG, node_align_SN,
     align_MRR = 0
     align_hits = [0]*len(hit_poses)
     idx = -1
+    ranks = []
+    # print(embed_KG[KG_node])
+    # print(trans_SN[SN_node])
+    # exit()
     for e1, e2 in zip(KG_node, SN_node):
         idx += 1
         # 每个KG实体和所有的SN测试集实体进行组合，计算距离并排序
         e_KG = np.ones(len(SN_node), dtype=np.int) * e1
         e_SN = SN_node
-        # print(e1)
-        # print(embed_KG[KG_node])
-        # print(e2)
-        # print(e_SN)
-        # print(trans_SN[SN_node])
-        # exit()
+
         # e1_c = np.setdiff1d(KG_node, np.array([e1]))#np.random.choice(KG_node, sample_num, replace=False)
         # e2_c = np.setdiff1d(SN_node, np.array([e2]))#np.random.choice(SN_node, sample_num, replace=False)
         # e_KG = np.ones(sample_num, dtype=np.int) * e1
@@ -54,6 +53,8 @@ def align_scores(embed_KG, trans_SN, node_align_KG, node_align_SN,
             # print(embed_KG[e_KG])
             # print(trans_SN[e_SN])
             metrix = embed_KG[e_KG] - trans_SN[e_SN]
+            # print(metrix)
+            # print(metrix)
             metrix = torch.abs(metrix)
             # print(metrix)
             result = torch.sum(metrix, dim=1)
@@ -62,6 +63,7 @@ def align_scores(embed_KG, trans_SN, node_align_KG, node_align_SN,
             # print(indice)
             # exit()
             index = (indice == idx).nonzero()[0][0]+1
+            # print(index)
         elif align_dist == 'cos':
             # dim=1，计算行向量的相似度
             result = torch.cosine_similarity(embed_KG[e_KG],
@@ -72,12 +74,14 @@ def align_scores(embed_KG, trans_SN, node_align_KG, node_align_SN,
         # index = torch.float(index)
         # e1更换，indice几乎没有变化，所以结果类似均匀分布
         # print(indice)
+        ranks.append(index)
         align_MRR += 1.0 / index.float()
         for i in range(len(hit_poses)):
             align_hits[i] += 1 if index <= hit_poses[i] else 0
     # exit()
     align_MRR /= len(KG_node)
     align_hits = [hits / len(KG_node) * 100 for hits in align_hits]
+    # print(ranks)
     return align_MRR, align_hits
 
 def OAG_KG_ReadData_LP(args=None):
@@ -174,6 +178,7 @@ def OAG_KG_ReadData_LP(args=None):
     field_features = []
     for field_id in field_backward.keys():
         field_feature = np.array(graph.node_feature['field'].loc[field_id, 'emb'])
+        # print(graph.node_feature['field'].loc[field_id, 'name'])
         field_features.append(field_feature)
     field_features = torch.tensor(field_features, dtype=torch.float32)
     venue_features = []
@@ -192,6 +197,110 @@ def OAG_KG_ReadData_LP(args=None):
     #     nn.init.xavier_uniform_(emb)
     #     g.nodes[ntype].data['feature'] = emb
     return g, author_forward, author_backward
+
+# def OAG_KG_ReadData_GCN(args=None):
+#     # 读取node_feature
+#     graph = dill.load(open('../../../jiangxuhui/Project/pyHGT/dataset/oag_output/graph_ML.pk', 'rb'))
+#
+#     dir_path = '../dataset/OAG'
+#     graph_data = {}
+#     # forward表示从dgl的id转成以前的id，backward表示从原本的节点id转成当前的dgl图id
+#     # 这里是同质图，所以节点id未必连续
+#     author_forward, author_backward = {}, {}
+#     affiliation_forward, affiliation_backward = {}, {}
+#     venue_forward, venue_backward = {}, {}
+#     field_forward, field_backward = {}, {}
+#     nodes1, nodes2 = [], []
+#     node_num = 0
+#     # 这里需要将节点的id进行转化，变成从0开始的节点
+#     with open(os.path.join(dir_path, 'author_affiliation.txt'), 'r') as fr:
+#         lines = fr.readlines()
+#         for line in lines:
+#             author_id, affiliation_id, time_id = map(int, line.strip('\n').split('\t'))
+#             if author_id not in author_backward:
+#                 author_backward[author_id] = node_num
+#                 author_forward[node_num] = author_id
+#                 node_num += 1
+#             nodes1.append(author_backward[author_id])
+#             if affiliation_id not in affiliation_backward:
+#                 affiliation_backward[affiliation_id] = node_num
+#                 affiliation_forward[node_num] = affiliation_id
+#                 node_num += 1
+#             nodes2.append(affiliation_backward[affiliation_id])
+#     with open(os.path.join(dir_path, 'author_field.txt'), 'r') as fr:
+#         lines = fr.readlines()
+#         for line in lines:
+#             author_id, field_id, time_id = map(int, line.strip('\n').split('\t'))
+#             if author_id not in author_backward:
+#                 author_backward[author_id] = node_num
+#                 author_forward[node_num] = author_id
+#                 node_num += 1
+#             nodes1.append(author_backward[author_id])
+#             if field_id not in field_backward:
+#                 field_backward[field_id] = node_num
+#                 field_forward[node_num] = field_id
+#             nodes2.append(field_backward[field_id])
+#
+#     with open(os.path.join(dir_path, 'author_venue.txt'), 'r') as fr:
+#         lines = fr.readlines()
+#         for line in lines:
+#             author_id, venue_id, time_id = map(int, line.strip('\n').split('\t'))
+#             if author_id not in author_backward:
+#                 author_backward[author_id] = node_num
+#                 author_forward[len(author_backward) - 1] = author_id
+#             author_ids.append(author_backward[author_id])
+#             if venue_id not in venue_backward:
+#                 venue_backward[venue_id] = len(venue_backward)
+#                 venue_forward[len(venue_backward) - 1] = venue_id
+#             venue_ids.append(venue_backward[venue_id])
+#             author_venue_time.append(time_id)
+#         graph_data[('author', 'contribute', 'venue')] = (torch.tensor(author_ids), torch.tensor(venue_ids))
+#         graph_data[('venue', 'be-contributed', 'author')] = (torch.tensor(venue_ids), torch.tensor(author_ids))
+#
+#     g = dgl.heterograph(graph_data)
+#     # 设置每条边的时间戳
+#     g.edges['in'].data['timestamp'] = torch.tensor(author_affiliation_time)
+#     g.edges['has'].data['timestamp'] = torch.tensor(author_affiliation_time)
+#     g.edges['study'].data['timestamp'] = torch.tensor(author_field_time)
+#     # g.edges['be-studied'].data['timestamp'] = torch.tensor(author_field_time)
+#     g.edges['contribute'].data['timestamp'] = torch.tensor(author_venue_time)
+#     g.edges['be-contributed'].data['timestamp'] = torch.tensor(author_venue_time)
+#
+#     # 设置每个节点的特征向量
+#     # 输出DataFrame的列名
+#     # print(graph.node_feature['author'].columns.values.tolist())
+#     # 节点的初始尺寸都是768
+#     author_features = []
+#     for author_id in author_backward.keys():
+#         author_feature = np.array(graph.node_feature['author'].loc[author_id, 'emb'])
+#         author_features.append(author_feature)
+#     author_features = torch.tensor(author_features, dtype=torch.float32)
+#     affiliation_features = []
+#     for affiliation_id in affiliation_backward.keys():
+#         affiliation_feature = np.array(graph.node_feature['affiliation'].loc[affiliation_id, 'emb'])
+#         affiliation_features.append(affiliation_feature)
+#     affiliation_features = torch.tensor(affiliation_features, dtype=torch.float32)
+#     field_features = []
+#     for field_id in field_backward.keys():
+#         field_feature = np.array(graph.node_feature['field'].loc[field_id, 'emb'])
+#         field_features.append(field_feature)
+#     field_features = torch.tensor(field_features, dtype=torch.float32)
+#     venue_features = []
+#     for venue_id in venue_backward.keys():
+#         venue_feature = np.array(graph.node_feature['venue'].loc[venue_id, 'emb'])
+#         venue_features.append(venue_feature)
+#     venue_features = torch.tensor(venue_features, dtype=torch.float32)
+#     g.nodes['author'].data['feature'] = author_features
+#     g.nodes['affiliation'].data['feature'] = affiliation_features
+#     g.nodes['field'].data['feature'] = field_features
+#     g.nodes['venue'].data['feature'] = venue_features
+#
+#     # 节点向量随机初始化
+#     # for ntype in g.ntypes:
+#     #     emb = nn.Parameter(torch.Tensor(g.number_of_nodes(ntype), args.in_dim), requires_grad=False)  # .to(device)
+#     #     nn.init.xavier_uniform_(emb)
+#     #     g.nodes[ntype].data['feature'] = emb
+#     return g, author_forward, author_backward
 
 def OAG_KG_ReadData_NC(args=None):
     # 节点分类预测每个作者的领域
