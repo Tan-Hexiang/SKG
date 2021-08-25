@@ -1,0 +1,21 @@
+1、数据集datasets
+5fold表示将数据分成5份，每份使用20%进行训练，10%验证，70%测试
+EN_FR_15K_V1/
+├── attr_triples_1: attribute triples in KG1：实体，属性，属性值
+├── attr_triples_2: attribute triples in KG2
+├── rel_triples_1: relation triples in KG1：实体，关系，实体
+├── rel_triples_2: relation triples in KG2
+├── ent_links: entity alignment between KG1 and KG2：dbpedia实体，wikidata实体
+├── 721_5fold/: entity alignment with test/train/valid (7:2:1) splits：将ent_links进行分割
+│   ├── 1/: the first fold
+│   │   ├── test_links
+│   │   ├── train_links
+│   │   └── valid_links
+│   ├── 2/
+│   ├── 3/
+│   ├── 4/
+│   ├── 5/
+
+2、args
+中间放的都是模型的参数设置，第一个单词表示模型，第三个单词表示数据集规模
+目前暂定gcnalign、rdgcn和alinet
