@@ -1,6 +1,8 @@
 # SN_NC时，KG中应该把一类边去掉，这里没有这么处理，所以会发生信息泄露，不过链接预测不是主任务，所以影响不大
 from parser import *
 import sys
+import optuna
+
 sys.path.extend(['../RGCN', '../HGT-DGL', '../GCN', '../GAT', '../GAE', '../GMI'])
 
 # 导入主实验模块
@@ -22,27 +24,10 @@ import model_GCN
 import model_GAT
 
 from warnings import filterwarnings
+
 filterwarnings("ignore")
 
-args, sys_argv = get_args()
-print(args)
-assert (args.dataset in ['OAG', 'WDT'])
-assert (args.KG_model in ['RGCN', 'HGT', 'None'])
-assert (args.KG_model in ['RGCN', 'HGT', 'None'])
-assert (args.SN_model in ['GCN', 'GAT', 'GAE', 'None'])
-assert (args.task in ['KG_NC', 'KG_LP', 'SN_NC', 'SN_LP', 'Align'])
-assert (args.KG_model != 'None' or args.SN_model != 'None')
-assert (args.KG_model != 'None' or 'KG' not in args.task)
-assert (args.KG_model != 'None' or 'Align' not in args.task)
-assert (args.SN_model != 'None' or 'SN' not in args.task)
-assert (args.SN_model != 'None' or 'Align' not in args.task)
-
-if args.cuda != -1:
-    device = torch.device("cuda:" + str(args.cuda))
-else:
-    device = torch.device("cpu")
-
-def KG_data_prepare():
+def KG_data_prepare(args):
     # if args.KG_model == 'None':
     #     return tuple([None]*9)
     # KG数据读取
@@ -55,7 +40,7 @@ def KG_data_prepare():
             KG, KG_forward, KG_backward = data_process_MAIN.OAG_KG_ReadData_LP(args)
             triplet = ('author', 'study', 'field')
         category = 'author'
-        
+
     elif args.dataset == 'WDT':
         if args.task in ['KG_NC', 'SN_NC']:
             KG, KG_forward, KG_backward = data_process_MAIN.WDT_KG_ReadData_NC(args)
@@ -93,13 +78,13 @@ def KG_data_prepare():
         # create model
         if args.KG_model == 'RGCN':
             model_KG = model_RGCN.RGCN_NC(KG,
-                                       in_dim=args.hidden_dim,# input dim现在必须得和隐藏层维度相同，因为i2h层没有办法把维度降下来
-                                       hidden_dim=args.hidden_dim,
-                                       out_dim=num_classes,
-                                       num_hidden_layers=args.n_layers,
-                                       dropout=args.dropout,
-                                       use_self_loop=args.use_self_loop)
-        else:#if args.KG_model == 'HGT':
+                                          in_dim=args.hidden_dim,  # input dim现在必须得和隐藏层维度相同，因为i2h层没有办法把维度降下来
+                                          hidden_dim=args.hidden_dim,
+                                          out_dim=num_classes,
+                                          num_hidden_layers=args.n_layers,
+                                          dropout=args.dropout,
+                                          use_self_loop=args.use_self_loop)
+        else:  # if args.KG_model == 'HGT':
             model_KG = model_HGT.HGT_NC(KG,
                                         in_dim=args.in_dim,
                                         hidden_dim=args.hidden_dim,
@@ -110,7 +95,6 @@ def KG_data_prepare():
         # elif args.KG_model == 'None':
         #     return tuple([None]*9)
         model_KG = model_KG.to(device)
-        print(KG)
         return KG, model_KG, category, labels, train_idx, valid_idx, test_idx, KG_forward, KG_backward
     else:
         if args.task == 'KG_LP':
@@ -165,7 +149,7 @@ def KG_data_prepare():
                                           num_hidden_layers=args.n_layers,
                                           dropout=args.dropout,
                                           use_self_loop=args.use_self_loop)
-        else:#elif args.KG_model == 'HGT':
+        else:  # elif args.KG_model == 'HGT':
             model_KG = model_HGT.HGT_LP(KG,
                                         in_dim=args.in_dim,
                                         hidden_dim=args.hidden_dim,
@@ -175,10 +159,10 @@ def KG_data_prepare():
                                         use_norm=True)
 
         model_KG = model_KG.to(device)
-        print(KG)
         return KG, model_KG, triplet, val_edges, val_edges_false, test_edges, test_edges_false, KG_forward, KG_backward
 
-def SN_data_prepare():
+
+def SN_data_prepare(args):
     # if args.SN_model == 'None':
     #     return tuple([None]*9)
     # SN数据读取
@@ -237,7 +221,6 @@ def SN_data_prepare():
 
         model_SN = model_SN.to(device)
 
-        print(SN)
         return SN, model_SN, labels, features, train_idx_SN, valid_idx_SN, test_idx_SN, SN_forward, SN_backward
     else:
         feature_SN = SN.ndata.pop('feature').to(device)
@@ -285,17 +268,32 @@ def SN_data_prepare():
                                         hidden_dim=args.hidden_dim,
                                         device=device)
         model_SN = model_SN.to(device)
-        print(SN)
         return SN, model_SN, feature_SN, val_edges, val_edges_false, \
                test_edges, test_edges_false, SN_forward, SN_backward
 
-if __name__ == '__main__':
+def objective(trial):
+    # 超参设置
+    args.align_dist = trial.suggest_categorical('align_dist',['L1','L2','cos'])
+    args.hidden_dim = trial.suggest_int('hidden_dim', 4, 200, step=4)
+    args.neg_num = trial.suggest_int('neg_num', 1, 10)
+    args.margin = trial.suggest_int('margin', 1, 10)
+    args.w_KG = trial.suggest_uniform('w_KG', 0.0, 2.0)
+    args.w_SN = trial.suggest_uniform('w_SN', 0.0, 2.0)
+    args.w_KG_MI = trial.suggest_uniform('w_KG_MI', 0.0, 2.0)
+    args.w_SN_MI = trial.suggest_uniform('w_SN_MI', 0.0, 2.0)
+    args.w_align = trial.suggest_uniform('w_align', 0.0, 2.0)
+    # alpha和beta暂时先不考虑了
+    # args.alpha = trial.suggest_uniform('alpha', 0.0, 1.0)
+    # args.beta = trial.suggest_uniform('beta', 0.0, 1.0)
+    args.n_layers = trial.suggest_int('n_layers', 1, 3)
+    print(args)
+
     if args.task == 'KG_NC':
         KG, model_KG, category_KG, labels_KG, train_idx_KG, valid_idx_KG, \
-        test_idx_KG, KG_forward, KG_backward = KG_data_prepare()
+        test_idx_KG, KG_forward, KG_backward = KG_data_prepare(args)
         if args.SN_model != 'None':
             SN, model_SN, feature_SN, val_edges_SN, val_edges_false_SN, \
-            test_edges_SN, test_edges_false_SN, SN_forward, SN_backward = SN_data_prepare()
+            test_edges_SN, test_edges_false_SN, SN_forward, SN_backward = SN_data_prepare(args)
             adj_SN = SN.adjacency_matrix().to_dense().to(device)
             weight_tensor_SN, norm_SN = data_process_SN.compute_loss_para_LP(adj_SN, device)
             model = Model_KG_NC(model_KG, model_SN, args.in_dim, args.hidden_dim, args.translate).to(device)
@@ -310,10 +308,10 @@ if __name__ == '__main__':
     # elif args.task in ['KG_LP', 'SN_LP', 'Align']:
     elif args.task == 'KG_LP':
         KG, model_KG, triplet, val_edges_KG, val_edges_false_KG, test_edges_KG, \
-        test_edges_false_KG, KG_forward, KG_backward = KG_data_prepare()
+        test_edges_false_KG, KG_forward, KG_backward = KG_data_prepare(args)
         if args.SN_model != 'None':
             SN, model_SN, feature_SN, val_edges_SN, val_edges_false_SN, \
-            test_edges_SN, test_edges_false_SN, SN_forward, SN_backward = SN_data_prepare()
+            test_edges_SN, test_edges_false_SN, SN_forward, SN_backward = SN_data_prepare(args)
             adj_SN = SN.adjacency_matrix().to_dense().to(device)
             weight_tensor_SN, norm_SN = data_process_SN.compute_loss_para_LP(adj_SN, device)
             model = Model_KG_LP(model_KG, model_SN, args.in_dim, args.hidden_dim, args.translate).to(device)
@@ -321,7 +319,7 @@ if __name__ == '__main__':
             model = model_KG
     elif args.task == 'SN_NC':
         SN, model_SN, labels_SN, feature_SN, train_idx_SN, valid_idx_SN, \
-        test_idx_SN, SN_forward, SN_backward = SN_data_prepare()
+        test_idx_SN, SN_forward, SN_backward = SN_data_prepare(args)
 
         if args.dataset == 'OAG':
             crition_SN = torch.nn.BCEWithLogitsLoss()
@@ -330,28 +328,28 @@ if __name__ == '__main__':
 
         if args.KG_model != 'None':
             KG, model_KG, triplet, val_edges_KG, val_edges_false_KG, test_edges_KG, \
-            test_edges_false_KG, KG_forward, KG_backward = KG_data_prepare()
+            test_edges_false_KG, KG_forward, KG_backward = KG_data_prepare(args)
             model = Model_SN_NC(model_KG, model_SN, args.in_dim, args.hidden_dim, args.translate).to(device)
         else:
             model = model_SN
     elif args.task == 'SN_LP':
         SN, model_SN, feature_SN, val_edges_SN, val_edges_false_SN, \
-        test_edges_SN, test_edges_false_SN, SN_forward, SN_backward = SN_data_prepare()
+        test_edges_SN, test_edges_false_SN, SN_forward, SN_backward = SN_data_prepare(args)
         adj_SN = SN.adjacency_matrix().to_dense().to(device)
         weight_tensor_SN, norm_SN = data_process_SN.compute_loss_para_LP(adj_SN, device)
 
         if args.KG_model != 'None':
             KG, model_KG, triplet, val_edges_KG, val_edges_false_KG, test_edges_KG, \
-            test_edges_false_KG, KG_forward, KG_backward = KG_data_prepare()
+            test_edges_false_KG, KG_forward, KG_backward = KG_data_prepare(args)
             model = Model_KG_LP(model_KG, model_SN, args.in_dim, args.hidden_dim, args.translate).to(device)
         else:
             model = model_SN
     elif args.task == 'Align':
         KG, model_KG, triplet, val_edges_KG, val_edges_false_KG, test_edges_KG, \
-        test_edges_false_KG, KG_forward, KG_backward = KG_data_prepare()
+        test_edges_false_KG, KG_forward, KG_backward = KG_data_prepare(args)
 
         SN, model_SN, feature_SN, val_edges_SN, val_edges_false_SN, \
-        test_edges_SN, test_edges_false_SN, SN_forward, SN_backward = SN_data_prepare()
+        test_edges_SN, test_edges_false_SN, SN_forward, SN_backward = SN_data_prepare(args)
         adj_SN = SN.adjacency_matrix().to_dense().to(device)
         weight_tensor_SN, norm_SN = data_process_SN.compute_loss_para_LP(adj_SN, device)
         model = Model_KG_LP(model_KG, model_SN, args.in_dim, args.hidden_dim, args.translate).to(device)
@@ -456,7 +454,7 @@ if __name__ == '__main__':
                 align_target = 'person'
 
             node_align_KG_neg = torch.randint(0, KG.num_nodes(align_target), (len(node_align_KG_train),)).to(device)
-                # node_align_SN_neg = torch.randint(0, SN.num_nodes(), (len(node_align_SN_train),)).to(device)
+            # node_align_SN_neg = torch.randint(0, SN.num_nodes(), (len(node_align_SN_train),)).to(device)
             node_align_SN_neg = torch.randint(0, SN.num_nodes(), (len(node_align_SN_train),)).to(device)
             relu = torch.nn.ReLU()
             if args.align_dist == 'L2':
@@ -469,7 +467,7 @@ if __name__ == '__main__':
                 res_neg2 = torch.sqrt(torch.sum(metrix_neg2 * metrix_neg2, dim=1))
                 results1 = args.margin + res_pos - res_neg1
                 results2 = args.margin + res_pos - res_neg2
-                loss_align += torch.sum(relu(results1))+torch.sum(relu(results2))
+                loss_align += torch.sum(relu(results1)) + torch.sum(relu(results2))
             elif args.align_dist == 'L1':
                 metrix_pos = KG.nodes[align_target].data['h'][node_align_KG_train] - trans_SN[node_align_SN_train]
                 metrix_neg1 = KG.nodes[align_target].data['h'][node_align_KG_train] - trans_SN[node_align_SN_neg]
@@ -479,7 +477,7 @@ if __name__ == '__main__':
                 res_neg2 = torch.sum(torch.abs(metrix_neg2), dim=1)
                 results1 = args.margin + res_pos - res_neg1
                 results2 = args.margin + res_pos - res_neg2
-                loss_align += torch.sum(relu(results1))+torch.sum(relu(results2))
+                loss_align += torch.sum(relu(results1)) + torch.sum(relu(results2))
                 # for result in results1:
                 #     loss_align += max(0, result)
                 # for result in results2:
@@ -487,13 +485,16 @@ if __name__ == '__main__':
 
             elif args.align_dist == 'cos':
                 # dim=1，计算行向量的相似度
-                res_pos = torch.cosine_similarity(KG.nodes[align_target].data['h'][node_align_KG_train], trans_SN[node_align_SN_train], dim=1)
-                res_neg1 = torch.cosine_similarity(KG.nodes[align_target].data['h'][node_align_KG_train], trans_SN[node_align_SN_neg], dim=1)
-                res_neg2 = torch.cosine_similarity(KG.nodes[align_target].data['h'][node_align_KG_neg], trans_SN[node_align_SN_train], dim=1)
+                res_pos = torch.cosine_similarity(KG.nodes[align_target].data['h'][node_align_KG_train],
+                                                  trans_SN[node_align_SN_train], dim=1)
+                res_neg1 = torch.cosine_similarity(KG.nodes[align_target].data['h'][node_align_KG_train],
+                                                   trans_SN[node_align_SN_neg], dim=1)
+                res_neg2 = torch.cosine_similarity(KG.nodes[align_target].data['h'][node_align_KG_neg],
+                                                   trans_SN[node_align_SN_train], dim=1)
                 # 余弦相似度在[-1, 1]间，为1相似度高，损失函数就小
                 results1 = args.margin + res_pos - res_neg1
                 results2 = args.margin + res_pos - res_neg2
-                loss_align += torch.sum(relu(results1))+torch.sum(relu(results2))
+                loss_align += torch.sum(relu(results1)) + torch.sum(relu(results2))
             loss_align /= len(node_align_KG_train)
 
         if args.KG_model == 'None':
@@ -503,9 +504,9 @@ if __name__ == '__main__':
         elif args.task == 'Align':
             loss = loss_align
         else:
-            loss = args.w_KG*loss_KG + args.w_SN*loss_SN + \
-                   args.w_KG_MI*loss_KG_MI + args.w_SN_MI*loss_SN_MI + \
-                   args.w_align*loss_align
+            loss = args.w_KG * loss_KG + args.w_SN * loss_SN + \
+                   args.w_KG_MI * loss_KG_MI + args.w_SN_MI * loss_SN_MI + \
+                   args.w_align * loss_align
 
         optimizer.zero_grad()
         loss.backward()
@@ -517,77 +518,45 @@ if __name__ == '__main__':
                 # 知识图谱节点分类的结果
                 if args.dataset == 'OAG':
                     # OAG是一个多标签分类问题，使用两个F1和hamming loss，F1越高越好，hamming_loss越小越好
-                    val_micro_f1_KG, val_macro_f1_KG, val_hamming_loss_KG = data_process_KG.get_score_NC_OAG(logits_KG, labels_KG, valid_idx_KG)
-                    print("Epoch:", '%04d' % (epoch + 1), "train_loss=", "{:.5f}".format(loss.item()),
-                          "val_micro_f1_KG=", "{:.5f}".format(val_micro_f1_KG),
-                          "val_macro_f1_KG=", "{:.5f}".format(val_macro_f1_KG),
-                          "val_hamming_loss_KG=", "{:.5f}".format(val_hamming_loss_KG),
-                          )
-                elif args.dataset == 'WDT':
-                    # WDT是一个多分类问题，使用precision和两个F1
-                    val_micro_f1_KG, val_macro_f1_KG, val_accuracy_KG = data_process_KG.get_score_NC_WDT(logits_KG,
+                    val_micro_f1_KG, val_macro_f1_KG, val_hamming_loss_KG = data_process_KG.get_score_NC_OAG(logits_KG,
                                                                                                              labels_KG,
                                                                                                              valid_idx_KG)
-                    print("Epoch:", '%04d' % (epoch + 1), "train_loss=", "{:.5f}".format(loss.item()),
-                          "val_micro_f1_KG=", "{:.5f}".format(val_micro_f1_KG),
-                          "val_macro_f1_KG=", "{:.5f}".format(val_macro_f1_KG),
-                          "val_accuracy_KG=", "{:.5f}".format(val_accuracy_KG),
-                          )
-
-                if early_stopper.early_stop_check(val_macro_f1_KG, model):
-                    print('Use macro_f1_KG as early stopping target')
-                    print('No improvment over {} epochs, stop training'.format(early_stopper.max_round))
+                elif args.dataset == 'WDT':
+                    # WDT是一个多分类问题，使用precision和两个F1
+                    val_micro_pre_KG, val_macro_pre_KG, val_micro_f1_KG, val_macro_f1_KG = data_process_KG.get_score_NC_WDT(
+                        logits_KG,
+                        labels_KG,
+                        valid_idx_KG)
+                if early_stopper.early_stop_check(val_micro_f1_KG, model):
                     print(f'Loading the best model at epoch {early_stopper.best_epoch}')
                     model = early_stopper.model
                     break
             elif args.task == 'KG_LP':
                 val_roc_KG, val_ap_KG = data_process_KG.get_score_LP(KG, val_edges_KG, val_edges_false_KG, triplet)
-                print("Epoch:", '%04d' % (epoch + 1), "train_loss=", "{:.5f}".format(loss.item()),
-                      "val_AUC_KG=", "{:.5f}".format(val_roc_KG),
-                      "val_AP_KG=", "{:.5f}".format(val_ap_KG),
-                      )
                 if early_stopper.early_stop_check(val_roc_KG, model):
-                    print('Use roc_KG as early stopping target')
-                    print('No improvment over {} epochs, stop training'.format(early_stopper.max_round))
                     print(f'Loading the best model at epoch {early_stopper.best_epoch}')
                     model = early_stopper.model
                     break
             elif args.task == 'SN_NC':
                 if args.dataset == 'OAG':
                     # OAG是一个多标签分类问题，使用两个F1和hamming loss，F1越高越好，hamming_loss越小越好
-                    val_micro_f1_SN, val_macro_f1_SN, val_hamming_loss_SN = data_process_SN.get_score_NC_OAG(logits_SN, labels_SN, valid_idx_SN)
-                    print("Epoch:", '%04d' % (epoch + 1), "train_loss=", "{:.5f}".format(loss.item()),
-                          "val_micro_f1_SN=", "{:.5f}".format(val_micro_f1_SN),
-                          "val_macro_f1_SN=", "{:.5f}".format(val_macro_f1_SN),
-                          "val_hamming_loss_SN=", "{:.5f}".format(val_hamming_loss_SN),
-                          )
-                elif args.dataset == 'WDT':
-                    # WDT是一个多分类问题，使用precision和两个F1
-                    val_micro_pre_SN, val_macro_pre_SN, val_micro_f1_SN, val_macro_f1_SN = data_process_SN.get_score_NC_WDT(logits_SN,
+                    val_micro_f1_SN, val_macro_f1_SN, val_hamming_loss_SN = data_process_SN.get_score_NC_OAG(logits_SN,
                                                                                                              labels_SN,
                                                                                                              valid_idx_SN)
-                    print("Epoch:", '%04d' % (epoch + 1), "train_loss=", "{:.5f}".format(loss.item()),
-                          "val_micro_pre_SN=", "{:.5f}".format(val_micro_pre_SN),
-                          "val_macro_pre_SN=", "{:.5f}".format(val_macro_pre_SN),
-                          "val_micro_f1_SN=", "{:.5f}".format(val_micro_f1_SN),
-                          "val_macro_f1_SN=", "{:.5f}".format(val_macro_f1_SN),
-                          )
+                elif args.dataset == 'WDT':
+                    # WDT是一个多分类问题，使用precision和两个F1
+                    val_micro_pre_SN, val_macro_pre_SN, val_micro_f1_SN, val_macro_f1_SN = data_process_SN.get_score_NC_WDT(
+                        logits_SN,
+                        labels_SN,
+                        valid_idx_SN)
                 if early_stopper.early_stop_check(val_micro_f1_SN, model):
-                    print('Use micro_f1_SN as early stopping target')
-                    print('No improvment over {} epochs, stop training'.format(early_stopper.max_round))
                     print(f'Loading the best model at epoch {early_stopper.best_epoch}')
                     model = early_stopper.model
                     break
             elif args.task == 'SN_LP':
                 # 社交网络链接预测的结果
                 val_roc_SN, val_ap_SN = data_process_SN.get_scores_LP(val_edges_SN, val_edges_false_SN, logits_SN)
-                print("Epoch:", '%04d' % (epoch + 1), "train_loss=", "{:.5f}".format(loss.item()),
-                      "val_AUC_SN=", "{:.5f}".format(val_roc_SN),
-                      "val_AP_SN=", "{:.5f}".format(val_ap_SN),
-                      )
                 if early_stopper.early_stop_check(val_roc_SN, model):
-                    print('Use roc_SN as early stopping target')
-                    print('No improvment over {} epochs, stop training'.format(early_stopper.max_round))
                     print(f'Loading the best model at epoch {early_stopper.best_epoch}')
                     model = early_stopper.model
                     break
@@ -601,20 +570,13 @@ if __name__ == '__main__':
                     sample_num=args.align_sample,
                     hit_pos=args.hits_num,
                     align_dist=args.align_dist)
-                print("Epoch:", '%04d' % (epoch + 1), "train_loss=", "{:.5f}".format(loss.item()),
-                      'val_MRR_align=', '{:.5f}'.format(val_MRR_align),
-                      "val_hits@{}_align=".format(args.hits_num), val_hits_align
-                      )
                 # early stopping
                 if early_stopper.early_stop_check(val_MRR_align.cpu(), model):
-                    # print('Use hits@{} as early stopping target'.format(args.hits_num))
-                    print('Use MRR as early stopping target')
-                    print('No improvment over {} epochs, stop training'.format(early_stopper.max_round))
                     print(f'Loading the best model at epoch {early_stopper.best_epoch}')
                     model = early_stopper.model
                     break
 
-    # 测试
+    # 输出测试结果
     if args.task == 'KG_NC':
         if args.SN_model == 'None':
             logits_KG = model()[category_KG]
@@ -629,6 +591,7 @@ if __name__ == '__main__':
                   "test_macro_f1_KG=", "{:.5f}".format(test_macro_f1_KG),
                   "test_hamming_loss_KG=", "{:.5f}".format(test_hamming_loss_KG),
                   )
+            return test_micro_f1_KG
         elif args.dataset == 'WDT':
             # WDT是一个多分类问题，使用precision和两个F1
             test_micro_pre_KG, test_macro_pre_KG, test_micro_f1_KG, test_macro_f1_KG = data_process_KG.get_score_NC_WDT(
@@ -640,11 +603,13 @@ if __name__ == '__main__':
                   "test_micro_f1_KG=", "{:.5f}".format(test_micro_f1_KG),
                   "test_macro_f1_KG=", "{:.5f}".format(test_macro_f1_KG),
                   )
+            return test_micro_f1_KG
 
     elif args.task == 'KG_LP':
         test_roc_KG, test_ap_KG = data_process_KG.get_score_LP(KG, test_edges_KG, test_edges_false_KG, triplet)
         print("test_roc_KG=", "{:.5f}".format(test_roc_KG),
               "test_ap_KG=", "{:.5f}".format(test_ap_KG))
+        return test_roc_KG
     elif args.task == 'SN_NC':
         if args.KG_model == 'None':
             logits_SN, embed_SN, h_w_SN = model(feature_SN)
@@ -655,12 +620,13 @@ if __name__ == '__main__':
         if args.dataset == 'OAG':
             # OAG是一个多标签分类问题，使用两个F1和hamming loss，F1越高越好，hamming_loss越小越好
             test_micro_f1_SN, test_macro_f1_SN, test_hamming_loss_SN = data_process_SN.get_score_NC_OAG(logits_SN,
-                                                                                                     labels_SN,
-                                                                                                     test_idx_SN)
+                                                                                                        labels_SN,
+                                                                                                        test_idx_SN)
             print("test_micro_f1_SN=", "{:.5f}".format(test_micro_f1_SN),
                   "test_macro_f1_SN=", "{:.5f}".format(test_macro_f1_SN),
                   "test_hamming_loss_SN=", "{:.5f}".format(test_hamming_loss_SN),
                   )
+            return test_micro_f1_SN
         elif args.dataset == 'WDT':
             # WDT是一个多分类问题，使用precision和两个F1
             test_micro_pre_SN, test_macro_pre_SN, test_micro_f1_SN, test_macro_f1_SN = data_process_SN.get_score_NC_WDT(
@@ -672,18 +638,52 @@ if __name__ == '__main__':
                   "test_micro_f1_SN=", "{:.5f}".format(test_micro_f1_SN),
                   "test_macro_f1_SN=", "{:.5f}".format(test_macro_f1_SN),
                   )
+            return test_micro_f1_SN
     elif args.task == 'SN_LP':
         test_roc_SN, test_ap_SN = data_process_SN.get_scores_LP(test_edges_SN, test_edges_false_SN, logits_SN)
         print("test_roc_SN=", "{:.5f}".format(test_roc_SN),
               "test_ap_SN=", "{:.5f}".format(test_ap_SN))
+        return test_roc_SN
     elif args.task == 'Align':
         test_MRR_align, test_hits_align = data_process_MAIN.align_scores(KG.nodes[align_target].data['h'],
-                                                                          trans_SN,
-                                                                          node_align_KG_test,
-                                                                          node_align_SN_test,
-                                                                          sample_num=args.align_sample,
-                                                                          hit_pos=args.hits_num,
-                                                                          align_dist=args.align_dist)
+                                                                         trans_SN,
+                                                                         node_align_KG_test,
+                                                                         node_align_SN_test,
+                                                                         sample_num=args.align_sample,
+                                                                         hit_pos=args.hits_num,
+                                                                         align_dist=args.align_dist)
         print('test_MRR_align=', '{:.5f}'.format(test_MRR_align),
               "test_hits@{}_align=".format(args.hits_num), test_hits_align)
+        return test_MRR_align
     print(args)
+
+if __name__ == '__main__':
+    args, sys_argv = get_args()
+    print(args)
+    assert (args.dataset in ['OAG', 'WDT'])
+    assert (args.KG_model in ['RGCN', 'HGT', 'None'])
+    assert (args.KG_model in ['RGCN', 'HGT', 'None'])
+    assert (args.SN_model in ['GCN', 'GAT', 'GAE', 'None'])
+    assert (args.task in ['KG_NC', 'KG_LP', 'SN_NC', 'SN_LP', 'Align'])
+    assert (args.KG_model != 'None' or args.SN_model != 'None')
+    assert (args.KG_model != 'None' or 'KG' not in args.task)
+    assert (args.KG_model != 'None' or 'Align' not in args.task)
+    assert (args.SN_model != 'None' or 'SN' not in args.task)
+    assert (args.SN_model != 'None' or 'Align' not in args.task)
+
+    if args.cuda != -1:
+        device = torch.device("cuda:" + str(args.cuda))
+    else:
+        device = torch.device("cpu")
+
+    study = optuna.create_study(direction='maximize')
+    study.optimize(objective, n_trials=400)
+    print("Number of finished trials: ", len(study.trials))
+
+    print("Best trial:")
+    trial = study.best_trial
+
+    print("  Value: ", trial.value)
+    print("  Params: ")
+    for key, value in trial.params.items():
+        print("    {}: {}".format(key, value))
