@@ -376,7 +376,6 @@ if __name__ == '__main__':
 
     early_stopper = data_process_MAIN.EarlyStopMonitor(max_round=args.max_round, min_epoch=args.min_epoch,
                                                        tolerance=args.tolerance)
-    print(model)
 
     for epoch in range(args.epochs):
         t = time.time()
@@ -460,15 +459,18 @@ if __name__ == '__main__':
             node_align_KG_neg = torch.randint(0, KG.num_nodes(align_target), (len(node_align_KG_train),)).to(device)
                 # node_align_SN_neg = torch.randint(0, SN.num_nodes(), (len(node_align_SN_train),)).to(device)
             node_align_SN_neg = torch.randint(0, SN.num_nodes(), (len(node_align_SN_train),)).to(device)
+            relu = torch.nn.ReLU()
             if args.align_dist == 'L2':
                 # 向量间的距离作为损失函数
                 metrix_pos = KG.nodes[align_target].data['h'][node_align_KG_train] - trans_SN[node_align_SN_train]
-                metrix_neg = KG.nodes[align_target].data['h'][node_align_KG_neg] - trans_SN[node_align_SN_neg]
+                metrix_neg1 = KG.nodes[align_target].data['h'][node_align_KG_train] - trans_SN[node_align_SN_neg]
+                metrix_neg2 = KG.nodes[align_target].data['h'][node_align_KG_neg] - trans_SN[node_align_SN_train]
                 res_pos = torch.sqrt(torch.sum(metrix_pos * metrix_pos, dim=1))
-                res_neg = torch.sqrt(torch.sum(metrix_neg * metrix_neg, dim=1))
-                results = args.margin + res_pos - res_neg
-                for result in results:
-                    loss_align += max(0, result)
+                res_neg1 = torch.sqrt(torch.sum(metrix_neg1 * metrix_neg1, dim=1))
+                res_neg2 = torch.sqrt(torch.sum(metrix_neg2 * metrix_neg2, dim=1))
+                results1 = args.margin + res_pos - res_neg1
+                results2 = args.margin + res_pos - res_neg2
+                loss_align += torch.sum(relu(results1))+torch.sum(relu(results2))
             elif args.align_dist == 'L1':
                 metrix_pos = KG.nodes[align_target].data['h'][node_align_KG_train] - trans_SN[node_align_SN_train]
                 metrix_neg1 = KG.nodes[align_target].data['h'][node_align_KG_train] - trans_SN[node_align_SN_neg]
@@ -478,19 +480,21 @@ if __name__ == '__main__':
                 res_neg2 = torch.sum(torch.abs(metrix_neg2), dim=1)
                 results1 = args.margin + res_pos - res_neg1
                 results2 = args.margin + res_pos - res_neg2
-                for result in results1:
-                    loss_align += max(0, result)
-                for result in results2:
-                    loss_align += max(0, result)
+                loss_align += torch.sum(relu(results1))+torch.sum(relu(results2))
+                # for result in results1:
+                #     loss_align += max(0, result)
+                # for result in results2:
+                #     loss_align += max(0, result)
 
             elif args.align_dist == 'cos':
                 # dim=1，计算行向量的相似度
                 res_pos = torch.cosine_similarity(KG.nodes[align_target].data['h'][node_align_KG_train], trans_SN[node_align_SN_train], dim=1)
-                res_neg = torch.cosine_similarity(KG.nodes[align_target].data['h'][node_align_KG_neg], trans_SN[node_align_SN_neg], dim=1)
+                res_neg1 = torch.cosine_similarity(KG.nodes[align_target].data['h'][node_align_KG_train], trans_SN[node_align_SN_neg], dim=1)
+                res_neg2 = torch.cosine_similarity(KG.nodes[align_target].data['h'][node_align_KG_neg], trans_SN[node_align_SN_train], dim=1)
                 # 余弦相似度在[-1, 1]间，为1相似度高，损失函数就小
-                results = args.margin - res_pos + res_neg
-                for result in results:
-                    loss_align += max(0, result)
+                results1 = args.margin + res_pos - res_neg1
+                results2 = args.margin + res_pos - res_neg2
+                loss_align += torch.sum(relu(results1))+torch.sum(relu(results2))
             loss_align /= len(node_align_KG_train)
 
         if args.KG_model == 'None':
@@ -512,11 +516,25 @@ if __name__ == '__main__':
         with torch.no_grad():
             if args.task == 'KG_NC':
                 # 知识图谱节点分类的结果
-                val_micro_f1_KG, val_macro_f1_KG, _, _ = data_process_KG.get_score_NC(logits_KG, labels_KG, valid_idx_KG)
-                print("Epoch:", '%04d' % (epoch + 1), "train_loss=", "{:.5f}".format(loss.item()),
-                      "val_micro_f1_KG=", "{:.5f}".format(val_micro_f1_KG),
-                      "val_macro_f1_KG=", "{:.5f}".format(val_macro_f1_KG),
-                      )
+                if args.dataset == 'OAG':
+                    # OAG是一个多标签分类问题，使用两个F1和hamming loss，F1越高越好，hamming_loss越小越好
+                    val_micro_f1_KG, val_macro_f1_KG, val_hamming_loss_KG = data_process_KG.get_score_NC_OAG(logits_KG, labels_KG, valid_idx_KG)
+                    print("Epoch:", '%04d' % (epoch + 1), "train_loss=", "{:.5f}".format(loss.item()),
+                          "val_micro_f1_KG=", "{:.5f}".format(val_micro_f1_KG),
+                          "val_macro_f1_KG=", "{:.5f}".format(val_macro_f1_KG),
+                          "val_hamming_loss_KG=", "{:.5f}".format(val_hamming_loss_KG),
+                          )
+                elif args.dataset == 'WDT':
+                    # WDT是一个多分类问题，使用precision和两个F1
+                    val_micro_f1_KG, val_macro_f1_KG, val_accuracy_KG = data_process_KG.get_score_NC_WDT(logits_KG,
+                                                                                                             labels_KG,
+                                                                                                             valid_idx_KG)
+                    print("Epoch:", '%04d' % (epoch + 1), "train_loss=", "{:.5f}".format(loss.item()),
+                          "val_micro_f1_KG=", "{:.5f}".format(val_micro_f1_KG),
+                          "val_macro_f1_KG=", "{:.5f}".format(val_macro_f1_KG),
+                          "val_accuracy_KG=", "{:.5f}".format(val_accuracy_KG),
+                          )
+
                 if early_stopper.early_stop_check(val_macro_f1_KG, model):
                     print('Use macro_f1_KG as early stopping target')
                     print('No improvment over {} epochs, stop training'.format(early_stopper.max_round))
@@ -536,12 +554,25 @@ if __name__ == '__main__':
                     model = early_stopper.model
                     break
             elif args.task == 'SN_NC':
-                val_micro_f1_SN, val_macro_f1_SN, _, _ = data_process_SN.get_score_NC(logits_SN, labels_SN,
-                                                                                      valid_idx_SN)
-                print("Epoch:", '%04d' % (epoch + 1), "train_loss=", "{:.5f}".format(loss.item()),
-                      "val_micro_f1_SN=", "{:.5f}".format(val_micro_f1_SN),
-                      "val_macro_f1_SN=", "{:.5f}".format(val_macro_f1_SN),
-                      )
+                if args.dataset == 'OAG':
+                    # OAG是一个多标签分类问题，使用两个F1和hamming loss，F1越高越好，hamming_loss越小越好
+                    val_micro_f1_SN, val_macro_f1_SN, val_hamming_loss_SN = data_process_SN.get_score_NC_OAG(logits_SN, labels_SN, valid_idx_SN)
+                    print("Epoch:", '%04d' % (epoch + 1), "train_loss=", "{:.5f}".format(loss.item()),
+                          "val_micro_f1_SN=", "{:.5f}".format(val_micro_f1_SN),
+                          "val_macro_f1_SN=", "{:.5f}".format(val_macro_f1_SN),
+                          "val_hamming_loss_SN=", "{:.5f}".format(val_hamming_loss_SN),
+                          )
+                elif args.dataset == 'WDT':
+                    # WDT是一个多分类问题，使用precision和两个F1
+                    val_micro_pre_SN, val_macro_pre_SN, val_micro_f1_SN, val_macro_f1_SN = data_process_SN.get_score_NC_WDT(logits_SN,
+                                                                                                             labels_SN,
+                                                                                                             valid_idx_SN)
+                    print("Epoch:", '%04d' % (epoch + 1), "train_loss=", "{:.5f}".format(loss.item()),
+                          "val_micro_pre_SN=", "{:.5f}".format(val_micro_pre_SN),
+                          "val_macro_pre_SN=", "{:.5f}".format(val_macro_pre_SN),
+                          "val_micro_f1_SN=", "{:.5f}".format(val_micro_f1_SN),
+                          "val_macro_f1_SN=", "{:.5f}".format(val_macro_f1_SN),
+                          )
                 if early_stopper.early_stop_check(val_micro_f1_SN, model):
                     print('Use micro_f1_SN as early stopping target')
                     print('No improvment over {} epochs, stop training'.format(early_stopper.max_round))
@@ -591,9 +622,26 @@ if __name__ == '__main__':
         else:
             logits_KG, res_mi_KG, res_local_KG, logits, features, trans_SN, res_mi_SN, res_local_SN = \
                 model(category_KG, SN, feature_SN, adj_SN, args.neg_num, device)
-        test_micro_f1_KG, test_macro_f1_KG, _, _ = data_process_KG.get_score_NC(logits_KG, labels_KG, test_idx_KG)
-        print("test_micro_f1_KG=", "{:.5f}".format(test_micro_f1_KG),
-              "test_macro_f1_KG=", "{:.5f}".format(test_macro_f1_KG))
+        if args.dataset == 'OAG':
+            test_micro_f1_KG, test_macro_f1_KG, test_hamming_loss_KG = data_process_KG.get_score_NC_OAG(logits_KG,
+                                                                                                        labels_KG,
+                                                                                                        test_idx_KG)
+            print("test_micro_f1_KG=", "{:.5f}".format(test_micro_f1_KG),
+                  "test_macro_f1_KG=", "{:.5f}".format(test_macro_f1_KG),
+                  "test_hamming_loss_KG=", "{:.5f}".format(test_hamming_loss_KG),
+                  )
+        elif args.dataset == 'WDT':
+            # WDT是一个多分类问题，使用precision和两个F1
+            test_micro_pre_KG, test_macro_pre_KG, test_micro_f1_KG, test_macro_f1_KG = data_process_KG.get_score_NC_WDT(
+                logits_KG,
+                labels_KG,
+                test_idx_KG)
+            print("test_micro_pre_KG=", "{:.5f}".format(test_micro_pre_KG),
+                  "test_macro_pre_KG=", "{:.5f}".format(test_macro_pre_KG),
+                  "test_micro_f1_KG=", "{:.5f}".format(test_micro_f1_KG),
+                  "test_macro_f1_KG=", "{:.5f}".format(test_macro_f1_KG),
+                  )
+
     elif args.task == 'KG_LP':
         test_roc_KG, test_ap_KG = data_process_KG.get_score_LP(KG, test_edges_KG, test_edges_false_KG, triplet)
         print("test_roc_KG=", "{:.5f}".format(test_roc_KG),
@@ -605,9 +653,26 @@ if __name__ == '__main__':
             negative_graph_KG = data_process_KG.construct_negative_graph_LP(KG, args.neg_num, triplet, device)
             _, _, _, _, logits_SN, _, _, _, _ = \
                 model(KG, negative_graph_KG, triplet, SN, feature_SN, args.neg_num, device)
-        test_micro_f1_SN, test_macro_f1_SN, _, _ = data_process_SN.get_score_NC(logits_SN, labels_SN, test_idx_SN)
-        print("test_micro_f1_SN=", "{:.5f}".format(test_micro_f1_SN),
-              "test_macro_f1_SN=", "{:.5f}".format(test_macro_f1_SN))
+        if args.dataset == 'OAG':
+            # OAG是一个多标签分类问题，使用两个F1和hamming loss，F1越高越好，hamming_loss越小越好
+            test_micro_f1_SN, test_macro_f1_SN, test_hamming_loss_SN = data_process_SN.get_score_NC_OAG(logits_SN,
+                                                                                                     labels_SN,
+                                                                                                     test_idx_SN)
+            print("test_micro_f1_SN=", "{:.5f}".format(test_micro_f1_SN),
+                  "test_macro_f1_SN=", "{:.5f}".format(test_macro_f1_SN),
+                  "test_hamming_loss_SN=", "{:.5f}".format(test_hamming_loss_SN),
+                  )
+        elif args.dataset == 'WDT':
+            # WDT是一个多分类问题，使用precision和两个F1
+            test_micro_pre_SN, test_macro_pre_SN, test_micro_f1_SN, test_macro_f1_SN = data_process_SN.get_score_NC_WDT(
+                logits_SN,
+                labels_SN,
+                test_idx_SN)
+            print("test_micro_pre_SN=", "{:.5f}".format(test_micro_pre_SN),
+                  "test_macro_pre_SN=", "{:.5f}".format(test_macro_pre_SN),
+                  "test_micro_f1_SN=", "{:.5f}".format(test_micro_f1_SN),
+                  "test_macro_f1_SN=", "{:.5f}".format(test_macro_f1_SN),
+                  )
     elif args.task == 'SN_LP':
         test_roc_SN, test_ap_SN = data_process_SN.get_scores_LP(test_edges_SN, test_edges_false_SN, logits_SN)
         print("test_roc_SN=", "{:.5f}".format(test_roc_SN),
