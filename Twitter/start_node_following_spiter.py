@@ -46,7 +46,13 @@ class SpiderTwitterAccountInfo(tool.abc.SingleSpider):
         f.write("\t")
         f.write(pair[1]) 
         f.write("\n")
-        
+    def running(self,start_node_list,username,despath) -> List[Dict]:
+        #先爬取第一跳数据
+        print("name="+username)
+        followers_name,following_name=self.getFollowers_and_Following(username)
+        num=0
+        for followers_pair in followers_name :
+            self.writepair(despath+'follower_relation_all.txt',followers_pair) 
 
     @staticmethod
     def get_twitter_user_name(page_url: str) -> str:
@@ -94,14 +100,14 @@ class SpiderTwitterAccountInfo(tool.abc.SingleSpider):
                     str1=str1[1:]
                     str1=str1.strip("\n")
                     following_name.append(str1)
-                    print("当前following数量为："+len(following_name))
+                    print("当前following数量为："+str(len(following_name)))
                    
             except Exception as e:
                 print(e)
                 # print("--get following of ",user_name)
 
             
-        print("爬取了所有following,共有"+len(following_name))
+        print("爬取了所有following,共有"+str(len(following_name)))
         return following_name
         
     def get_startnode_following(self,despath,start_node_list):
@@ -121,8 +127,9 @@ class SpiderTwitterAccountInfo(tool.abc.SingleSpider):
                         relation_pair=[following,startnode]
                         self.writepair(despath+'startnode_follower_relation.txt',relation_pair)
 
-                except:
+                except Exception as e:
                     print("爬取失败"+startnode+"加入失败队列")
+                    print(e)
                     faillist.append(startnode)
         #失败节点写入失败文件夹
         failf=open(despath+'fail_nodes.txt',"a+")
@@ -145,7 +152,7 @@ def spidermain_filter(start_node_list):
     driver = webdriver.Chrome(executable_path=r"L:\\社交知识图谱\\联合基金重点项目\\网络爬虫\\NLP-Twitter-main\\chromedriver_win32\\chromedriver.exe",options=driverOptions)
 
     #
-    SpiderTwitterAccountInfo(driver).get_startnode_following("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\",start_node_list)
+    SpiderTwitterAccountInfo(driver).get_startnode_following(".\\Limit200\\",start_node_list)
 
     driver.quit()
 
