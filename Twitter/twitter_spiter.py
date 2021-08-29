@@ -4,6 +4,7 @@ chromedriver.exe地址
 浏览器用户密码缓存地址
 user.txt用户名列表地址
 """
+from os import truncate
 from pprint import pprint
 import queue
 import re
@@ -15,7 +16,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from queue import Queue
 import winsound
-maxfollowers_num=500
+maxfollowers_num=100
 maxfollowing_num=400
 min_interaction=5#最低5个
 max_interaction=15#15个直接终止
@@ -133,7 +134,7 @@ class SpiderTwitterAccountInfo(tool.abc.SingleSpider):
             self.driver.execute_script(js2)#操控浏览器进行下拉
             time.sleep(2)#空出加载的时间
             self.driver.execute_script(js2)#操控浏览器进行下拉
-            time.sleep(5)#空出加载的时间
+            time.sleep(8)#空出加载的时间
 
             #正式爬取数据
            
@@ -180,6 +181,14 @@ class SpiderTwitterAccountInfo(tool.abc.SingleSpider):
         return following_name,save,num
         
     def filter_followers(self,despath,start_node_list):
+        #断点恢复
+        start=False
+        if start==False:
+            interrupt_node_str=input("请输入断点twitter账号")
+            interrupt_node_str=interrupt_node_str.strip("\n")
+            print("读取断点"+interrupt_node_str)
+        else:
+            print("从头运行程序")
         #过滤器，只使用被5整除的粉丝。一类5万左右粉丝使用1万
         nob=0
         #失败列表
@@ -191,34 +200,42 @@ class SpiderTwitterAccountInfo(tool.abc.SingleSpider):
         for relation_str in f_all.readlines():
             #保留五分之一
             nob=nob+1
-            if (nob%5)==0:
+            if (nob%2)==0:
                 relation=relation_str.split("\t",1)
                 follower_name=relation[1].strip("\n")
-                print(follower_name)
-                #获取关注列表，并根据saveflag决定是否落盘
-                try:
-                    interlist,saveflag,internum=self.get_following(start_node_list,follower_name)
+                #找到断点位置，打开标记
+                if follower_name == interrupt_node_str :
+                    start=True
+                    print("找到断点"+follower_name)
+                #当start标记打开时才爬取
+                if start==False:
+                    continue
+                elif start==True:
+                    print("开始爬取"+follower_name)
+                    #获取关注列表，并根据saveflag决定是否落盘
+                    try:
+                        interlist,saveflag,internum=self.get_following(start_node_list,follower_name)
 
-                    if saveflag == False:
-                        print("舍弃:"+follower_name+" 稠密度为："+str(internum),file=logfilter)
-                        print("舍弃:"+follower_name+" 稠密度为："+str(internum))
-                    elif saveflag == True:
-                        pprint(interlist)
-                        print("保留:"+follower_name+" 稠密度为："+str(internum),file=logfilter)
-                        print("保留:"+follower_name+" 稠密度为："+str(internum))
-                        for firstnode in interlist :
-                            relation_pair=[firstnode,follower_name]
-                            self.writepair(despath+'follower_relation.txt',relation_pair)
-                        pair=[relation[0].strip('\n'),follower_name]
-                        self.writepair(despath+'follower_relation.txt',pair)
-                        # 存储粉丝关注的初始节点数
-                        pair=[follower_name,str(internum)]
-                        self.writepair(despath+'followerName_firstNodeNum.txt',pair)
-                except:
-                    print("爬取失败"+follower_name+"加入失败队列")
-                    faillist.append(follower_name)
+                        if saveflag == False:
+                            print("舍弃:"+follower_name+" 稠密度为："+str(internum),file=logfilter)
+                            print("舍弃:"+follower_name+" 稠密度为："+str(internum))
+                        elif saveflag == True:
+                            pprint(interlist)
+                            print("保留:"+follower_name+" 稠密度为："+str(internum),file=logfilter)
+                            print("保留:"+follower_name+" 稠密度为："+str(internum))
+                            for firstnode in interlist :
+                                relation_pair=[firstnode,follower_name]
+                                self.writepair(despath+'follower_relation2.txt',relation_pair)
+                            pair=[relation[0].strip('\n'),follower_name]
+                            self.writepair(despath+'follower_relation2.txt',pair)
+                            # 存储粉丝关注的初始节点数
+                            pair=[follower_name,str(internum)]
+                            self.writepair(despath+'followerName_firstNodeNum2.txt',pair)
+                    except:
+                        print("爬取失败"+follower_name+"加入失败队列")
+                        faillist.append(follower_name)
         #失败节点写入失败文件夹
-        failf=open(despath+'fail_nodes.txt',"a+")
+        failf=open(despath+'fail_nodes2.txt',"a+")
         for line in faillist:
             failf.write(line+"\n")
         failf.close()
@@ -255,7 +272,7 @@ class SpiderTwitterAccountInfo(tool.abc.SingleSpider):
             self.driver.execute_script(js2)#操控浏览器进行下拉
             time.sleep(2)#空出加载的时间
             self.driver.execute_script(js2)#操控浏览器进行下拉
-            time.sleep(5)#空出加载的时间
+            time.sleep(3)#空出加载的时间
             
 
             #正式爬取数据
@@ -419,7 +436,7 @@ def spidermain_filter(start_node_list):
 
     # 筛选粉丝稠密度的主函数
     #SpiderTwitterAccountInfo(driver).filter_followers("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NBA\\",start_node_list)
-    SpiderTwitterAccountInfo(driver).filter_followers("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NFL\\",start_node_list)
+    SpiderTwitterAccountInfo(driver).filter_followers("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NHL\\",start_node_list)
     #SpiderTwitterAccountInfo(driver).filter_followers("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\英超\\",start_node_list)
     #SpiderTwitterAccountInfo(driver).filter_followers("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\美国棒球联赛\\",start_node_list)
 
@@ -429,28 +446,29 @@ def spidermain_filter(start_node_list):
 
 #————————————————开始筛选
 #获取对应类型的社交网络
-start_node_list=[]
-f=open("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NBA\\twittername.txt","r",encoding='utf-8')
-for name in f.readlines():
-    name=name.strip("\n")
-    start_node_list.append(name)
-f.close()
-f=open("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NFL\\twittername.txt","r",encoding='utf-8')
-for name in f.readlines():
-    name=name.strip("\n")
-    start_node_list.append(name)
-f.close()
-f=open("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NHL\\twittername.txt","r",encoding='utf-8')
-for name in f.readlines():
-    name=name.strip("\n")
-    start_node_list.append(name)
-f.close()
-f=open("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\美国棒球联赛\\twittername.txt","r",encoding='utf-8')
-for name in f.readlines():
-    name=name.strip("\n")
-    start_node_list.append(name)
-f.close()
-
-spidermain_filter(start_node_list)
+if __name__ == "__main__":
+    start_node_list=[]
+    f=open("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NBA\\twittername.txt","r",encoding='utf-8')
+    for name in f.readlines():
+        name=name.strip("\n")
+        start_node_list.append(name)
+    f.close()
+    f=open("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NFL\\twittername.txt","r",encoding='utf-8')
+    for name in f.readlines():
+        name=name.strip("\n")
+        start_node_list.append(name)
+    f.close()
+    f=open("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\NHL\\twittername.txt","r",encoding='utf-8')
+    for name in f.readlines():
+        name=name.strip("\n")
+        start_node_list.append(name)
+    f.close()
+    f=open("L:\\社交知识图谱\\联合基金重点项目\\数据\\Limit200\\美国棒球联赛\\twittername.txt","r",encoding='utf-8')
+    for name in f.readlines():
+        name=name.strip("\n")
+        start_node_list.append(name)
+    f.close()
+    # 
+    spidermain_filter(start_node_list)
 
 
